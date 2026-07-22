@@ -7,9 +7,12 @@
   "type": "commonjs",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "build": "tsc"
   },
   "dependencies": {
+    "@repo/auth": "workspace:*",
     "@repo/db": "workspace:*",
     "better-auth": "^1.6.24",
     "compression": "^1.8.1",
