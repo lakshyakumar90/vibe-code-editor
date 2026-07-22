@@ -173,6 +173,9 @@ importers:
       better-auth:
         specifier: ^1.6.24
         version: 1.6.24(@prisma/client@7.9.0(prisma@7.9.0(@types/react-dom@19.2.2(@types/react@19.2.2))(@types/react@19.2.2)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@5.9.2))(typescript@5.9.2))(mysql2@3.15.3)(next@16.2.0(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(pg@8.22.0)(prisma@7.9.0(@types/react-dom@19.2.2(@types/react@19.2.2))(@types/react@19.2.2)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@5.9.2))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      dotenv:
+        specifier: ^17.4.2
+        version: 17.4.2
       express:
         specifier: ^5.2.1
         version: 5.2.1
