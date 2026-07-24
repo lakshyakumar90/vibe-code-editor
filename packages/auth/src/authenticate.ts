@@ -1,3 +1,4 @@
+import "./types";
 import { auth } from "./auth";
 import type { Request, Response, NextFunction } from "express";
 

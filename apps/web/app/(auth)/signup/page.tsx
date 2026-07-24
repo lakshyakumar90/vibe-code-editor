@@ -1,53 +1,27 @@
 "use client";
 
-import { useState } from "react";
-import { AuthClient } from "../../../lib/auth-client";
+import { SignupForm } from "@/components/auth/signup-form"
+import { AuthClient } from "@/lib/auth-client";
+import { useRouter } from "next/navigation";
 
 export default function SignupPage() {
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
+  const router = useRouter();
+  const { data: session } = AuthClient.useSession();
 
-    const { data, error } = await AuthClient.signUp.email({
-      name,
-      email,
-      password,
-    })
-
-    if (error) {
-      setError(error.message || "An error occurred during signup.");
-    } else {
-      // Handle successful signup (e.g., redirect to a welcome page)
-      console.log("Signup successful:", data);
-    }
+  if (session?.user.emailVerified === false) {
+    router.push(`/verify-email?email=${encodeURIComponent(session.user.email)}`);
+    return null; // Prevent rendering the login form while redirecting
   }
 
+  if (session) {
+    router.push("/");
+    return null; // Prevent rendering the signup form while redirecting
+  }
+  
   return (
-     <form onSubmit={handleSubmit}>
-       <input
-         placeholder="Name"
-         value={name}
-         onChange={(e) => setName(e.target.value)}
-       />
- 
-       <input
-         placeholder="Email"
-         value={email}
-         onChange={(e) => setEmail(e.target.value)}
-       />
- 
-       <input
-         type="password"
-         placeholder="Password"
-         value={password}
-         onChange={(e) => setPassword(e.target.value)}
-       />
- 
-       <button type="submit">Sign Up</button>
-     </form>
-   );
- }
+    <div className="flex min-h-screen items-center justify-center p-4">
+      <SignupForm />
+    </div>
+  )
+}

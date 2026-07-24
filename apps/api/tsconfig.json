@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",                          /* Specify ECMAScript target version */
+    "module": "NodeNext",                        /* Required for modern Node/ESM module resolution */
+    "moduleResolution": "NodeNext",
+    "outDir": "./dist",                          /* Where your compiled JS files will go */
+    "rootDir": "./src",                          /* Where your source TS files are located */
+    "strict": true,                              /* Enable all strict type-checking options */
+    "esModuleInterop": true,                     /* Emits additional JavaScript to ease support for importing CommonJS modules */
+    "skipLibCheck": true,                        /* Skip type checking of declaration files */
+    "forceConsistentCasingInFileNames": true     /* Disallow inconsistently-cased references to the same file */
+  },
+  "include": ["src/**/*"]                        /* Make sure this matches your project folder structure */
+}
