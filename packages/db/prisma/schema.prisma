@@ -83,6 +83,7 @@ model Project {
 
   members ProjectMember[]
   files   File[]
+  messages Message[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -98,7 +99,7 @@ model ProjectMember {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  role      ProjectRole
+  role      ProjectRole @default(EDITOR)
   createdAt DateTime    @default(now())
 
   //This prevents the same user from being added to the same project twice.
@@ -109,8 +110,8 @@ model ProjectMember {
 
 enum ProjectRole {
   OWNER
-  ADMIN
-  MEMBER
+  EDITOR
+  VIEWER
 }
 
 model File {
@@ -129,4 +130,18 @@ model File {
   //This means a project cannot have two files with the same path.
   @@unique([projectId, path])
   @@index([projectId])
+}
+
+model Message {
+  id String @id @default(cuid())
+  content String
+  projectId String
+  role String
+  
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  
+  @@index([projectId, createdAt])
 }
