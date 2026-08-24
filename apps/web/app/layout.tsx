@@ -3,6 +3,7 @@ import localFont from "next/font/local";
 import "./globals.css";
 import { DM_Sans } from "next/font/google";
 import { cn } from "@/lib/utils";
+import { Navbar } from "@/components/layout/navbar";
 
 const dmSans = DM_Sans({subsets:['latin'],variable:'--font-sans'});
 
@@ -28,6 +29,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={cn("font-sans", dmSans.variable)}>
       <body className={`${geistSans.variable} ${geistMono.variable}`}>
+        <Navbar />
         {children}
       </body>
     </html>

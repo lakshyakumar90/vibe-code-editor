@@ -28,8 +28,7 @@ import {
 import { Input } from "@repo/ui/components/ui/input"
 import { Separator } from "@repo/ui/components/ui/separator"
 import { SocialLogin } from "@/components/auth/social-login"
-
-const EMAIL_NOT_VERIFIED_STATUS = 403
+import { EMAIL_NOT_VERIFIED_STATUS } from "@/lib/constants"
 
 export function LoginForm() {
   const router = useRouter()

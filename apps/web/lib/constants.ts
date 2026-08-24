@@ -1,0 +1,1 @@
+export const EMAIL_NOT_VERIFIED_STATUS = 403

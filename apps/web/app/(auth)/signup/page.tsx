@@ -3,20 +3,24 @@
 import { SignupForm } from "@/components/auth/signup-form"
 import { AuthClient } from "@/lib/auth-client";
 import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 
 export default function SignupPage() {
 
   const router = useRouter();
-  const { data: session } = AuthClient.useSession();
+  const { data: session, isPending } = AuthClient.useSession();
 
-  if (session?.user.emailVerified === false) {
-    router.push(`/verify-email?email=${encodeURIComponent(session.user.email)}`);
-    return null; // Prevent rendering the login form while redirecting
-  }
+  useEffect(() => {
+    if (isPending) return;
+    if (session?.user.emailVerified === false)
+      router.replace(
+        `/verify-email?email=${encodeURIComponent(session.user.email)}`,
+      );
+    else if (session) router.replace("/");
+  }, [session, isPending, router]);
 
-  if (session) {
-    router.push("/");
-    return null; // Prevent rendering the signup form while redirecting
+  if (isPending || session) {
+    return <div>Loading...</div>;
   }
   
   return (
