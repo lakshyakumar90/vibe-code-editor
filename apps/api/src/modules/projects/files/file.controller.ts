@@ -7,7 +7,6 @@ import {
 } from "./file.validation";
 import { z } from "zod";
 import { fileService } from "./file.service";
-import { listSessions } from "better-auth/api";
 
 export const fileController = {
   async listFiles(req: Request, res: Response) {
@@ -32,6 +31,7 @@ export const fileController = {
         res.status(400).json({ errors: error.issues });
         return;
       }
+      console.error("[listFiles] Error:", error);
       res.status(500).json({ error: "Internal server error" });
     }
   },
@@ -127,8 +127,7 @@ export const fileController = {
 
   async moveFile(req: Request, res: Response) {
     try {
-      const { projectId } = req.params;
-      const { fileId } = req.query;
+      const { projectId, fileId } = req.params;
       if (typeof projectId !== "string" || typeof fileId !== "string") {
         res
           .status(400)

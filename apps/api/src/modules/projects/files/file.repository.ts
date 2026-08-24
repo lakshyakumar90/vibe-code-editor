@@ -64,7 +64,7 @@ export const fileRepository = {
 
   async createFile(data: {
     name: string;
-    content?: string;
+    content?: string | null;
     parentId?: string | null;
     isFolder: boolean;
     path: string;
@@ -86,8 +86,12 @@ export const fileRepository = {
       path?: string;
     }>,
   ) {
-    return prisma.file.updateMany({
+    const existing = await prisma.file.findFirst({
       where: { id: fileId, projectId },
+    });
+    if (!existing) throw new Error("FILE_NOT_FOUND");
+    return prisma.file.update({
+      where: { id: fileId },
       data,
     });
   },

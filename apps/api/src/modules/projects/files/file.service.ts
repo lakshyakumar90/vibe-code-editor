@@ -18,7 +18,7 @@ export const fileService = {
     projectId: string,
     input: {
       name: string;
-      content?: string | undefined;
+      content?: string | null | undefined;
       parentId?: string | null | undefined;
       isFolder: boolean;
     },
@@ -65,10 +65,16 @@ export const fileService = {
       throw new Error("File not found");
     }
 
+    const effectiveParentId =
+      input.parentId !== undefined ? input.parentId : file.parentId;
+
     let parentPath: string | null = null;
 
-    if (input.parentId) {
-      const parent = await fileRepository.getParent(projectId, input.parentId);
+    if (effectiveParentId) {
+      const parent = await fileRepository.getParent(
+        projectId,
+        effectiveParentId,
+      );
       if (!parent) {
         throw new Error("Parent folder not found");
       }
@@ -78,12 +84,13 @@ export const fileService = {
       parentPath = parent.path;
     }
 
-    const path = buildFilePath(input.name ?? file.name, parentPath);
+    const effectiveName = input.name ?? file.name;
+    const path = buildFilePath(effectiveName, parentPath);
 
     return fileRepository.updateFile(fileId, projectId, {
-      name: input.name ?? file.name,
+      name: effectiveName,
       content: input.content ?? file.content,
-      parentId: input.parentId ?? file.parentId,
+      parentId: effectiveParentId,
       isFolder: input.isFolder ?? file.isFolder,
       path,
     });
