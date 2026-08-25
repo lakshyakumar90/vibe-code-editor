@@ -1,188 +1,72 @@
 "use client";
 
-import {
-  useEffect,
-  useRef,
-  useState,
-} from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
 import Editor from "@monaco-editor/react";
 import { api } from "@/lib/api";
 import type { ProjectFile } from "@/types/file";
+import { getLanguage } from "@/lib/file-icons";
+import { toast } from "sonner";
 
 interface CodeEditorProps {
   projectId: string;
   file: ProjectFile | null;
+  value: string;
+  onChange: (value: string) => void;
+  onSave: () => Promise<void>;
+  saving: boolean;
 }
 
-export function CodeEditor({
-  projectId,
-  file,
-}: CodeEditorProps) {
-  const [value, setValue] =
-    useState("");
+export function CodeEditor({ projectId, file, value, onChange, onSave, saving }: CodeEditorProps) {
+  const valueRef = useRef(value);
+  valueRef.current = value;
+  const editorRef = useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
 
-  const [saving, setSaving] =
-    useState(false);
-
-  const saveTimer =
-    useRef<ReturnType<
-      typeof setTimeout
-    > | null>(null);
-
+  // global Ctrl+S
   useEffect(() => {
-    if (!file) {
-      setValue("");
-      return;
-    }
-
-    setValue(file.content ?? "");
-  }, [file]);
-
-  useEffect(() => {
-    return () => {
-      if (saveTimer.current) {
-        clearTimeout(
-          saveTimer.current,
-        );
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
+        e.preventDefault();
+        onSave();
       }
     };
-  }, []);
-
-  function saveFile(
-    nextValue: string,
-  ) {
-    if (!file || file.isFolder) {
-      return;
-    }
-
-    if (saveTimer.current) {
-      clearTimeout(
-        saveTimer.current,
-      );
-    }
-
-    saveTimer.current =
-      setTimeout(async () => {
-        try {
-          setSaving(true);
-
-          await api.put(
-            `/api/projects/${projectId}/files/${file.id}`,
-            {
-              name: file.name,
-              parentId: file.parentId,
-              isFolder: false,
-              content: nextValue,
-            },
-          );
-        } catch (error) {
-          console.error(
-            "Failed to save file:",
-            error,
-          );
-        } finally {
-          setSaving(false);
-        }
-      }, 700);
-  }
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onSave]);
 
   if (!file) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        Select a file to begin editing.
-      </div>
-    );
+    return <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a file to begin editing.</div>;
   }
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-10 items-center border-b px-4 text-sm">
-        <span>{file.path}</span>
-
-        {saving && (
-          <span className="ml-auto">
-            Saving...
-          </span>
-        )}
-      </div>
-
       <div className="min-h-0 flex-1">
         <Editor
+          key={file.id}
           height="100%"
           path={file.path}
-          value={value}
-          theme="vs-dark"
-          language={getLanguage(
-            file.name,
-          )}
+          defaultValue={value}
+          theme="vs"
+          language={getLanguage(file.name)}
           onChange={(nextValue) => {
-            const next =
-              nextValue ?? "";
-
-            setValue(next);
-            saveFile(next);
+            onChange(nextValue ?? "");
           }}
           onMount={(editor, monaco) => {
-            editor.addCommand(
-              monaco.KeyMod.CtrlCmd |
-                monaco.KeyCode.KeyS,
-              () => {
-                saveFile(value);
-              },
-            );
+            editorRef.current = editor;
+            editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+              onSave();
+            });
+            editor.focus();
           }}
           options={{
             automaticLayout: true,
-            minimap: {
-              enabled: true,
-            },
+            minimap: { enabled: false },
             fontSize: 14,
             tabSize: 2,
+            wordWrap: "on",
+            scrollBeyondLastLine: false,
           }}
         />
       </div>
     </div>
   );
-}
-
-function getLanguage(
-  fileName: string,
-) {
-  const extension =
-    fileName
-      .split(".")
-      .pop()
-      ?.toLowerCase();
-
-  switch (extension) {
-    case "ts":
-      return "typescript";
-
-    case "tsx":
-      return "typescript";
-
-    case "js":
-      return "javascript";
-
-    case "jsx":
-      return "javascript";
-
-    case "json":
-      return "json";
-
-    case "css":
-      return "css";
-
-    case "scss":
-      return "scss";
-
-    case "html":
-      return "html";
-
-    case "md":
-      return "markdown";
-
-    default:
-      return "plaintext";
-  }
 }

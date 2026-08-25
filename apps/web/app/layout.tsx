@@ -28,9 +28,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={cn("font-sans", dmSans.variable)}>
-      <body className={`${geistSans.variable} ${geistMono.variable}`}>
+      <body className={`${geistSans.variable} ${geistMono.variable} flex h-screen flex-col overflow-hidden`}>
         <Navbar />
-        {children}
+        <div className="flex min-h-0 flex-1 overflow-hidden">{children}</div>
       </body>
     </html>
   );
