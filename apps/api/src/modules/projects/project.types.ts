@@ -3,6 +3,8 @@ import { ProjectRole } from "@repo/db";
 export interface CreateProjectInput {
   name: string;
   description?: string;
+  template: string;
+  memberIds?: string[];
 };
 
 export interface UpdateProjectInput {

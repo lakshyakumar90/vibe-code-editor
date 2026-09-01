@@ -1,5 +1,7 @@
 import {z} from "zod";
 
+const templateEnum = z.enum(["REACT", "VUE", "HONO", "EXPRESS", "NEXTJS", "ANGULAR"]);
+
 export const createProjectSchema = z.object({
   name: z
     .string()
@@ -9,7 +11,9 @@ export const createProjectSchema = z.object({
   description: z
     .string()
     .max(500, "Project description must be at most 500 characters long")
-    .optional()
+    .optional(),
+  template: templateEnum,
+  memberIds: z.array(z.string()).default([]),
 });
 
 export const updateProjectSchema = z.object({

@@ -10,7 +10,9 @@ export const projectService = {
     const project = await ProjectRepository.createProject({
       name: input.name,
       description: input.description,
+      template: input.template,
       ownerId: userId,
+      memberIds: input.memberIds,
     });
 
     return project;

@@ -5,18 +5,25 @@ export const ProjectRepository = {
   async createProject(data: {
     name: string;
     description?: string;
+    template: string;
     ownerId: string;
+    memberIds?: string[];
   }) {
+    const memberCreates = [
+      { userId: data.ownerId, role: ProjectRole.OWNER },
+      ...(data.memberIds ?? [])
+        .filter((id) => id !== data.ownerId)
+        .map((userId) => ({ userId, role: ProjectRole.EDITOR })),
+    ];
+
     return prisma.project.create({
       data: {
         name: data.name,
         description: data.description,
+        template: data.template as any,
         ownerId: data.ownerId,
         members: {
-          create: {
-            userId: data.ownerId,
-            role: ProjectRole.OWNER,
-          },
+          create: memberCreates,
         },
       },
 
