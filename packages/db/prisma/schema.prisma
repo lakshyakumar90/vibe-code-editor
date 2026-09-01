@@ -80,7 +80,8 @@ model Project {
 
   ownerId String
   owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-
+  template Template
+  
   members ProjectMember[]
   files   File[]
   messages Message[]
@@ -89,6 +90,15 @@ model Project {
   updatedAt DateTime @updatedAt
 
   @@index([ownerId])
+}
+
+enum Template {
+  REACT
+  VUE
+  HONO
+  EXPRESS
+  NEXTJS
+  ANGULAR
 }
 
 model ProjectMember {
