@@ -5,14 +5,19 @@ import { Button } from "@repo/ui";
 import { AuthClient } from "@/lib/auth-client";
 
 export default function Page() {
-  const { data: session } = AuthClient.useSession();
+  const { data: session, isPending } = AuthClient.useSession();
 
   return (
     <div className="h-screen w-full flex flex-col gap-4 items-center justify-center">
       <h1 className="text-3xl font-bold">
         Hello, Welcome to Vibe Code Editor!
       </h1>
-      {session ? (
+      {isPending ? (
+        <div className="flex gap-2">
+          <div className="h-10 w-24 animate-pulse rounded-md bg-muted" />
+          <div className="h-10 w-20 animate-pulse rounded-md bg-muted" />
+        </div>
+      ) : session ? (
         <div className="">
           <Link href="/dashboard">
             <Button size="lg" variant="outline">
@@ -32,11 +37,9 @@ export default function Page() {
           </Link>
         </div>
       )}
-      {
-        session && (
-          <h1>Hello {session?.user.name}</h1>
-        )
-      }
+      {session && (
+        <h1>Hello {session?.user.name}</h1>
+      )}
     </div>
   );
 }

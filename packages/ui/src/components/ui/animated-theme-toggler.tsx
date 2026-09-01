@@ -162,10 +162,15 @@ export const AnimatedThemeToggler = ({
   const shape = variant ?? "circle"
   const isControlled = theme !== undefined
   const [internalIsDark, setInternalIsDark] = useState(false)
+  const [mounted, setMounted] = useState(false)
   const isDark = isControlled ? theme === "dark" : internalIsDark
   const buttonRef = useRef<HTMLButtonElement>(null)
   const isTransitioningRef = useRef(false)
   const activeAnimRef = useRef<Animation | null>(null)
+
+  useEffect(() => {
+    setMounted(true)
+  }, [])
 
   const cancelAnim = useCallback(() => {
     activeAnimRef.current?.cancel()
@@ -323,7 +328,7 @@ export const AnimatedThemeToggler = ({
       className={cn(className)}
       {...props}
     >
-      {isDark ? <Sun /> : <Moon />}
+      {mounted ? (isDark ? <Sun /> : <Moon />) : <Moon />}
       <span className="sr-only">Toggle theme</span>
     </button>
   )

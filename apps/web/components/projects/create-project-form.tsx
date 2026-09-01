@@ -162,19 +162,21 @@ export function CreateProjectForm({ onSuccess }: CreateProjectFormProps) {
       <div className="space-y-2">
         <Label>Members</Label>
         <Popover open={membersOpen} onOpenChange={setMembersOpen}>
-          <PopoverTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              role="combobox"
-              aria-expanded={membersOpen}
-              className="w-full justify-between font-normal"
-            >
-              {memberIds.length > 0
-                ? `${memberIds.length} member${memberIds.length === 1 ? "" : "s"} selected`
-                : "Add project members"}
-              <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />
-            </Button>
+          <PopoverTrigger
+            render={
+              <Button
+                type="button"
+                variant="outline"
+                role="combobox"
+                aria-expanded={membersOpen}
+                className="w-full justify-between font-normal"
+              />
+            }
+          >
+            {memberIds.length > 0
+              ? `${memberIds.length} member${memberIds.length === 1 ? "" : "s"} selected`
+              : "Add project members"}
+            <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />
           </PopoverTrigger>
           <PopoverContent
             align="start"

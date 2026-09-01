@@ -85,8 +85,8 @@ export function RecentProjects() {
           </p>
         </div>
 
-        <Button variant="ghost" size="sm" asChild>
-          <Link href="/dashboard/projects">View all</Link>
+        <Button variant="ghost" size="sm" render={<Link href="/dashboard/projects" />}>
+          View all
         </Button>
       </div>
 
@@ -192,13 +192,11 @@ export function RecentProjects() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          asChild
+                          render={<Link href={`/dashboard/projects/${project.id}`} />}
                           className="opacity-0 transition-opacity group-hover:opacity-100"
                         >
-                          <Link href={`/dashboard/projects/${project.id}`}>
-                            <ArrowRight className="size-4" />
-                            <span className="sr-only">Open {project.name}</span>
-                          </Link>
+                          <ArrowRight className="size-4" />
+                          <span className="sr-only">Open {project.name}</span>
                         </Button>
                       </TableCell>
                     </TableRow>

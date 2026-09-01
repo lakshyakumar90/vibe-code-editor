@@ -23,7 +23,7 @@ import {
 import { Button } from "@repo/ui";
 
 export function Navbar() {
-  const { data: session } = AuthClient.useSession();
+  const { data: session, isPending } = AuthClient.useSession();
 
   return (
     <header className="fixed top-4 left-0 z-50 w-full px-4">
@@ -40,7 +40,9 @@ export function Navbar() {
         <div className="flex items-center gap-2">
           <ModeToggle />
 
-          {!session ? (
+          {isPending ? (
+            <div className="h-9 w-9 animate-pulse rounded-full bg-muted" />
+          ) : !session ? (
             <Button>
               <Link href="/login">
                 Get Started
@@ -48,29 +50,30 @@ export function Navbar() {
             </Button>
           ) : (
             <DropdownMenu>
-              <DropdownMenuTrigger>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="rounded-full"
-                >
-                  <Avatar className="h-8 w-8">
-                    <AvatarImage
-                      src={session.user?.image || ""}
-                      alt={session.user?.name || "Profile"}
-                    />
+              <DropdownMenuTrigger
+                render={
+                  <button
+                    type="button"
+                    className="rounded-full p-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  />
+                }
+              >
+                <Avatar className="h-8 w-8">
+                  <AvatarImage
+                    src={session.user?.image || ""}
+                    alt={session.user?.name || "Profile"}
+                  />
 
-                    <AvatarFallback>
-                      {session.user?.name?.charAt(0).toUpperCase() || (
-                        <User className="h-4 w-4" />
-                      )}
-                    </AvatarFallback>
-                  </Avatar>
+                  <AvatarFallback>
+                    {session.user?.name?.charAt(0).toUpperCase() || (
+                      <User className="h-4 w-4" />
+                    )}
+                  </AvatarFallback>
+                </Avatar>
 
-                  <span className="sr-only">
-                    Open profile menu
-                  </span>
-                </Button>
+                <span className="sr-only">
+                  Open profile menu
+                </span>
               </DropdownMenuTrigger>
 
               <DropdownMenuContent align="end" className="w-48">
