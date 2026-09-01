@@ -44,6 +44,8 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
   const [pendingCreate, setPendingCreate] = useState<{ parentId: string | null; isFolder: boolean; value: string } | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ProjectFile | null>(null);
   const [closeTarget, setCloseTarget] = useState<ProjectFile | null>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(288);
+  const [isResizing, setIsResizing] = useState(false);
   const filesRef = useRef(files);
   filesRef.current = files;
 
@@ -375,14 +377,39 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
   };
   const cancelCreate = () => setPendingCreate(null);
 
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const diff = e.clientX - startX;
+      const newWidth = Math.min(Math.max(startWidth + diff, 180), 500);
+      setSidebarWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+  }, [sidebarWidth]);
+
   return (
     <div className="flex h-full w-full overflow-hidden">
-      <aside className="w-72 shrink-0 border-r flex flex-col overflow-hidden bg-card">
+      <aside
+        style={{ width: sidebarWidth }}
+        className="shrink-0 border-r flex flex-col overflow-hidden bg-card"
+      >
         <div className="flex h-9 shrink-0 items-center justify-between border-b px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           <span>Explorer</span>
           <span className="text-[11px]">{clipboard ? `${clipboard.op}: ${clipboard.file.name}` : ""}</span>
         </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
           {loading ? <div className="p-4 text-sm">Loading files...</div> : (
             <FileTree
               projectId={projectId}
@@ -406,6 +433,11 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
           )}
         </div>
       </aside>
+
+      <div
+        onMouseDown={handleResizeStart}
+        className={`w-1 shrink-0 cursor-col-resize hover:bg-primary/20 transition-colors ${isResizing ? "bg-primary/20" : ""}`}
+      />
 
       <main className="min-w-0 flex flex-1 flex-col overflow-hidden bg-background">
         {/* VS Code style tabs - light */}
