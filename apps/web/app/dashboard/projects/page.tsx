@@ -1,39 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
-import { FolderKanban, Plus } from "lucide-react";
-import { api } from "@/lib/api";
+import { FolderKanban } from "lucide-react";
 import { AuthGuard } from "@/components/auth/auth-guard";
 import { Button, Card, CardContent, Skeleton } from "@repo/ui";
+import { useProjects } from "@/hooks/use-projects";
 
-interface Project {
-  id: string;
-  name: string;
-  description: string | null;
-  template: string;
-  createdAt: string;
-  owner: {
-    id: string;
-    name: string;
-    email: string;
-  };
-  members: {
-    id: string;
-    role: string;
-  }[];
+function getInitials(name: string): string {
+  return name
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
 }
 
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    api
-      .get<{ success: boolean; data: Project[] }>("/api/projects")
-      .then((r) => setProjects(r.data))
-      .finally(() => setLoading(false));
-  }, []);
+  const { projects, loading } = useProjects();
 
   if (loading) {
     return (
@@ -71,27 +54,40 @@ export default function ProjectsPage() {
           </Card>
         ) : (
           <div className="grid gap-4">
-            {projects.map((p) => (
+            {projects.map((project) => (
               <Link
-                key={p.id}
-                href={`/dashboard/projects/${p.id}`}
+                key={project.id}
+                href={`/dashboard/projects/${project.id}`}
                 className="flex items-center gap-4 border rounded-lg p-4 hover:bg-accent transition-colors"
               >
                 <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-muted/30">
                   <FolderKanban className="size-5 text-muted-foreground" />
                 </div>
                 <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">{p.name}</p>
+                  <p className="font-medium truncate">{project.name}</p>
                   <p className="text-sm text-muted-foreground truncate">
-                    {p.description || "No description"}
+                    {project.description || "No description"}
                   </p>
                 </div>
                 <div className="flex items-center gap-3">
+                  <div className="flex -space-x-2">
+                    {project.members.slice(0, 3).map((member) => (
+                      <div
+                        key={member.id}
+                        className="flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-background bg-primary/10 text-xs font-medium"
+                        title={member.user?.name || "Unknown"}
+                      >
+                        {getInitials(member.user?.name || "U")}
+                      </div>
+                    ))}
+                    {project.members.length > 3 && (
+                      <div className="flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-background bg-muted text-xs font-medium">
+                        +{project.members.length - 3}
+                      </div>
+                    )}
+                  </div>
                   <span className="rounded-md border bg-muted/30 px-2 py-1 text-xs font-medium">
-                    {p.template}
-                  </span>
-                  <span className="text-xs text-muted-foreground whitespace-nowrap">
-                    {p.members.length} member{p.members.length !== 1 ? "s" : ""}
+                    {project.template}
                   </span>
                 </div>
               </Link>

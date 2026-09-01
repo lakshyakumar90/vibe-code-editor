@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowRight, FolderKanban } from "lucide-react";
 
@@ -17,23 +16,7 @@ import {
   TableRow,
 } from "@repo/ui";
 
-interface Project {
-  id: string;
-  name: string;
-  description: string | null;
-  template: string;
-  createdAt: string;
-  owner: {
-    id: string;
-    name: string;
-    email: string;
-  };
-  members: {
-    id: string;
-    role: string;
-    userId: string;
-  }[];
-}
+import { useProjects } from "@/hooks/use-projects";
 
 function formatRelativeTime(dateString: string): string {
   const now = new Date();
@@ -50,25 +33,17 @@ function formatRelativeTime(dateString: string): string {
   return date.toLocaleDateString();
 }
 
+function getInitials(name: string): string {
+  return name
+    .split(" ")
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase()
+    .slice(0, 2);
+}
+
 export function RecentProjects() {
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    const API_URL =
-      process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000";
-
-    fetch(`${API_URL}/api/projects`, {
-      credentials: "include",
-    })
-      .then((res) => res.json())
-      .then((result) => {
-        if (result.success) {
-          setProjects(result.data.slice(0, 5));
-        }
-      })
-      .finally(() => setLoading(false));
-  }, []);
+  const { projects, loading } = useProjects({ limit: 5 });
 
   if (loading) {
     return (
@@ -162,21 +137,31 @@ export function RecentProjects() {
                       </TableCell>
 
                       <TableCell>
-                        <span className="text-sm">
-                          {project.owner?.name || "You"}
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-medium">
+                            {getInitials(project.owner?.name || "You")}
+                          </div>
+                          <span className="text-sm">
+                            {project.owner?.name || "You"}
+                          </span>
+                        </div>
                       </TableCell>
 
                       <TableCell>
                         {project.members.length > 0 ? (
                           <div className="flex items-center gap-1">
                             {project.members.slice(0, 2).map((member) => (
-                              <span
+                              <div
                                 key={member.id}
-                                className="rounded-md bg-muted px-2 py-1 text-xs"
+                                className="flex items-center gap-1 rounded-md bg-muted px-2 py-1"
                               >
-                                {member.userId ? member.userId.slice(0, 8) + "..." : "Member"}
-                              </span>
+                                <div className="flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-medium">
+                                  {getInitials(member.user?.name || "U")}
+                                </div>
+                                <span className="text-xs">
+                                  {member.user?.name || "Unknown"}
+                                </span>
+                              </div>
                             ))}
                             {project.members.length > 2 && (
                               <span className="text-xs text-muted-foreground">

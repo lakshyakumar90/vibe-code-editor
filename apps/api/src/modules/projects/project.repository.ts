@@ -73,13 +73,17 @@ export const ProjectRepository = {
           },
         },
         members: {
-          where: {
-            userId: userId,
-          },
           select: {
             id: true,
             userId: true,
             role: true,
+            user: {
+              select: {
+                id: true,
+                name: true,
+                email: true,
+              },
+            },
           },
         },
       },
