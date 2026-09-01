@@ -77,6 +77,8 @@ export const ProjectRepository = {
             userId: userId,
           },
           select: {
+            id: true,
+            userId: true,
             role: true,
           },
         },

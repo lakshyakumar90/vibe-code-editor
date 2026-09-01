@@ -132,30 +132,29 @@ export function CreateProjectForm({
     setServerError(null);
 
     try {
-      const response = await fetch("/api/projects", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(data),
-      });
+      const response = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:5000"}/api/projects/create`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          credentials: "include",
+          body: JSON.stringify(data),
+        }
+      );
 
       const result = await response.json();
 
       if (!response.ok) {
         setServerError(
-          result.error ?? "Failed to create project."
+          result.message ?? "Failed to create project."
         );
-
         return;
       }
 
       onSuccess?.();
-
-      router.push(
-        `/dashboard/projects/${result.project.id}`
-      );
-
+      router.push(`/dashboard/projects/${result.data.id}`);
       router.refresh();
     } catch {
       setServerError(
