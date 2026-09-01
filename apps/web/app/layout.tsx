@@ -4,6 +4,7 @@ import "./globals.css";
 import { DM_Sans } from "next/font/google";
 import { cn } from "@/lib/utils";
 import { Navbar } from "@/components/layout/navbar";
+import { ThemeProvider } from "@/components/layout/theme-provider";
 
 const dmSans = DM_Sans({subsets:['latin'],variable:'--font-sans'});
 
@@ -28,9 +29,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={cn("font-sans", dmSans.variable)}>
-      <body className={`${geistSans.variable} ${geistMono.variable} flex h-screen flex-col overflow-hidden`}>
+      <body className={`${geistSans.variable} ${geistMono.variable}`}>
         <Navbar />
-        <div className="flex min-h-0 flex-1 overflow-hidden">{children}</div>
+        <ThemeProvider>
+          <div className="">{children}</div>
+        </ThemeProvider>
       </body>
     </html>
   );

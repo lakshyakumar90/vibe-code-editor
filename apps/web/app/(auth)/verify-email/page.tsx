@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation"
 import { AuthClient } from "@/lib/auth-client"
 import { toast } from "sonner"
 
-import { Button } from "@repo/ui/components/ui/button"
+import { Button } from "@repo/ui"
 import {
   Card,
   CardContent,
