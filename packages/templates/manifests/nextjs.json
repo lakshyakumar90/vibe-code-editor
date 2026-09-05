@@ -1,0 +1,8 @@
+{
+  "id": "NEXTJS",
+  "name": "Next.js + shadcn",
+  "version": "1.0.0",
+  "dir": "nextjs",
+  "entry": "app/page.tsx",
+  "source": "stackblitz/starters nextjs-shadcn (MIT, curated)"
+}

@@ -1,0 +1,8 @@
+{
+  "id": "ANGULAR",
+  "name": "Angular",
+  "version": "1.0.0",
+  "dir": "angular",
+  "entry": "src/main.ts",
+  "source": "stackblitz/starters angular (MIT, curated)"
+}

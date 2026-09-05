@@ -1,0 +1,8 @@
+{
+  "id": "VUE",
+  "name": "Vue",
+  "version": "1.0.0",
+  "dir": "vue",
+  "entry": "src/main.js",
+  "source": "stackblitz/starters vue (MIT, curated)"
+}

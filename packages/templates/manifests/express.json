@@ -1,0 +1,8 @@
+{
+  "id": "EXPRESS",
+  "name": "Express",
+  "version": "1.0.0",
+  "dir": "express",
+  "entry": "index.js",
+  "source": "stackblitz/starters express-simple (MIT, curated)"
+}

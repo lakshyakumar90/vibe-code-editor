@@ -85,7 +85,7 @@ export function RecentProjects() {
           </p>
         </div>
 
-        <Button variant="ghost" size="sm" render={<Link href="/dashboard/projects" />}>
+        <Button variant="ghost" size="sm" render={<Link href="/dashboard/projects" />} nativeButton={false}>
           View all
         </Button>
       </div>
@@ -193,6 +193,7 @@ export function RecentProjects() {
                           variant="ghost"
                           size="icon"
                           render={<Link href={`/dashboard/projects/${project.id}`} />}
+                          nativeButton={false}
                           className="opacity-0 transition-opacity group-hover:opacity-100"
                         >
                           <ArrowRight className="size-4" />

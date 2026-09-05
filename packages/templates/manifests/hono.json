@@ -1,0 +1,8 @@
+{
+  "id": "HONO",
+  "name": "Hono",
+  "version": "1.0.0",
+  "dir": "hono",
+  "entry": "src/index.ts",
+  "source": "stackblitz/starters hono-nodejs-starter (MIT, curated)"
+}
