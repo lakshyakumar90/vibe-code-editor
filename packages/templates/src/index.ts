@@ -1,9 +1,10 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import type { TemplateId } from "./runtime";
 
 export interface TemplateManifest {
-  id: "REACT" | "VUE" | "HONO" | "EXPRESS" | "NEXTJS" | "ANGULAR";
+  id: TemplateId;
   name: string;
   version: string;
   dir: string;
