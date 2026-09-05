@@ -1,8 +1,8 @@
 {
   "id": "REACT",
   "name": "React + TS",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "dir": "react",
-  "entry": "src/index.tsx",
+  "entry": "src/main.tsx",
   "source": "stackblitz/starters react-ts (MIT, curated)"
 }
