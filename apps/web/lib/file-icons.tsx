@@ -51,16 +51,21 @@ export function getFileIcon(name: string, isFolder: boolean, expanded: boolean):
 }
 
 export function getLanguage(fileName: string): string {
+  // NOTE: JSX support comes from the `.tsx` model URI + jsx:ReactJSX
+  // compiler option (see lib/language), not from this language id.
   const ext = fileName.split(".").pop()?.toLowerCase();
   switch (ext) {
     case "ts": return "typescript";
     case "tsx": return "typescript";
     case "js": return "javascript";
     case "jsx": return "javascript";
+    case "mjs": return "javascript";
+    case "cjs": return "javascript";
     case "json": return "json";
     case "css": return "css";
     case "scss": return "scss";
     case "html": return "html";
+    case "vue": return "html"; // V1 fallback; full Volar support is a V2 milestone
     case "md": return "markdown";
     default: return "plaintext";
   }

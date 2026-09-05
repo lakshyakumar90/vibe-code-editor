@@ -1,6 +1,6 @@
 "use client";
 
-import type { WebContainer } from "@webcontainer/api";
+import type { WebContainer, WebContainerProcess } from "@webcontainer/api";
 import { TEMPLATE_RUNTIME } from "@repo/templates/runtime";
 import type { TemplateId } from "@repo/templates/runtime";
 import { normalizeDbPath } from "@/lib/workspace/paths";
@@ -34,6 +34,8 @@ async function pipeOutput(
 export class ProjectRuntime {
   private container: WebContainer | null = null;
   private serverReadyUnsub: (() => void) | null = null;
+  private devProcess: WebContainerProcess | null = null;
+  private devOutput: OutputHandler | undefined;
   readonly template: TemplateId;
 
   constructor(template: TemplateId = "REACT") {
@@ -71,9 +73,28 @@ export class ProjectRuntime {
   /** Start the dev server (no await on exit — long-lived). */
   async startDevServer(onOutput?: OutputHandler): Promise<void> {
     const container = await this.boot();
+    this.devOutput = onOutput ?? this.devOutput;
     const [cmd, ...args] = TEMPLATE_RUNTIME[this.template].start;
     const process = await container.spawn(cmd!, args);
-    void pipeOutput(process.output, onOutput);
+    this.devProcess = process;
+    void pipeOutput(process.output, this.devOutput);
+    void process.exit.then(() => {
+      if (this.devProcess === process) this.devProcess = null;
+    });
+  }
+
+  /** Kill the running dev server (if any) and start a fresh one. */
+  async restartDevServer(onOutput?: OutputHandler): Promise<void> {
+    this.devOutput = onOutput ?? this.devOutput;
+    if (this.devProcess) {
+      try {
+        this.devProcess.kill();
+      } catch {
+        // already exited — fall through to fresh start
+      }
+      this.devProcess = null;
+    }
+    await this.startDevServer(this.devOutput);
   }
 
   onServerReady(cb: (port: number, url: string) => void): void {
@@ -114,6 +135,14 @@ export class ProjectRuntime {
   teardown(): void {
     this.serverReadyUnsub?.();
     this.serverReadyUnsub = null;
+    if (this.devProcess) {
+      try {
+        this.devProcess.kill();
+      } catch {
+        // ignore — container is going away
+      }
+      this.devProcess = null;
+    }
     this.container = null;
   }
 }

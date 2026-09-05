@@ -7,6 +7,11 @@ import { CodeEditor } from "./code-editor";
 import { api } from "@/lib/api";
 import { getUniqueName, getPasteParentId, collectDescendants } from "@/lib/file-utils";
 import { getFileIcon } from "@/lib/file-icons";
+import { createWorkspace, type VirtualWorkspace } from "@/lib/workspace/workspace";
+import { buildPathToId } from "@/lib/workspace/file-map";
+import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
+import { removeModelByPath } from "@/lib/language/model-manager";
+import { useRuntime } from "./runtime-provider";
 import { toast } from "sonner";
 import {
   AlertDialog,
@@ -29,6 +34,30 @@ interface FilesResponse {
   data: ProjectFile[];
 }
 
+/** "src/a/b.ts" -> "src/a" (null at root). Mirrors server buildFilePath. */
+function dirOf(path: string): string | null {
+  const i = path.lastIndexOf("/");
+  return i === -1 ? null : path.slice(0, i);
+}
+
+/** Path a child would get under parentId (root when parentId is null). */
+function childPath(
+  files: ProjectFile[],
+  parentId: string | null,
+  name: string,
+): string {
+  if (!parentId) return name;
+  const parent = files.find((f) => f.id === parentId);
+  return parent ? `${parent.path}/${name}` : name;
+}
+
+/** Non-folder files at dir or under it. */
+function filesUnder(files: ProjectFile[], dir: string): ProjectFile[] {
+  return files.filter(
+    (f) => !f.isFolder && (f.path === dir || f.path.startsWith(`${dir}/`)),
+  );
+}
+
 export function EditorLayout({ projectId }: EditorLayoutProps) {
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,6 +77,52 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
   const [isResizing, setIsResizing] = useState(false);
   const filesRef = useRef(files);
   filesRef.current = files;
+  const editedContentsRef = useRef(editedContents);
+  editedContentsRef.current = editedContents;
+
+  // --- WebContainer / workspace sync (Steps 0+1+6) ---
+  const { runtime, bootAndMount, install, start } = useRuntime();
+  const workspaceRef = useRef<VirtualWorkspace | null>(null);
+  const pathToIdRef = useRef<Map<string, string>>(new Map());
+  const bootedRef = useRef(false);
+  const startedRef = useRef(false);
+  const containerReadyRef = useRef(false);
+  const depHashRef = useRef<string>("");
+  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
+    };
+  }, []);
+
+  /** Best-effort mirror into the container FS + workspace. Never throws. */
+  const containerWrite = useCallback(
+    async (path: string, content: string) => {
+      workspaceRef.current?.updateFile(path, content);
+      if (!containerReadyRef.current) return;
+      try {
+        await runtime.writeFile(path, content);
+      } catch {
+        toast.error("Sync to runtime failed");
+      }
+    },
+    [runtime],
+  );
+
+  const containerRemove = useCallback(
+    async (path: string) => {
+      workspaceRef.current?.deleteFile(path);
+      removeModelByPath(path);
+      if (!containerReadyRef.current) return;
+      try {
+        await runtime.rm(path, true);
+      } catch {
+        toast.error("Sync to runtime failed");
+      }
+    },
+    [runtime],
+  );
 
   const activeFile = activeFileId ? openFiles.find((f) => f.id === activeFileId) ?? files.find((f) => f.id === activeFileId) ?? null : null;
   const activeValue = activeFile ? (editedContents[activeFile.id] ?? activeFile.content ?? "") : "";
@@ -71,8 +146,10 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
       if (activeFileId && !arr.find((f) => f.id === activeFileId)) {
         setActiveFileId(null);
       }
+      return arr;
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load files");
+      return [] as ProjectFile[];
     } finally {
       if (!silent) setLoading(false);
     }
@@ -82,6 +159,32 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
+
+  // Boot the runtime once files arrive: workspace -> mount -> install -> dev.
+  // Structural edits later only mirror (no reinstall/remount).
+  useEffect(() => {
+    if (files.length === 0 || bootedRef.current) return;
+    bootedRef.current = true;
+    const snapshot = [...files];
+    workspaceRef.current = createWorkspace(snapshot);
+    pathToIdRef.current = buildPathToId(snapshot);
+    void (async () => {
+      try {
+        await bootAndMount(snapshot.map((f) => ({ path: f.path, content: f.content })));
+        containerReadyRef.current = true;
+        await install();
+        depHashRef.current = hashPackageJson(
+          workspaceRef.current?.getFile("package.json") ?? "",
+        );
+        await start();
+        startedRef.current = true;
+      } catch {
+        // status/error surface in PreviewPanel via the provider
+        bootedRef.current = false;
+        containerReadyRef.current = false;
+      }
+    })();
+  }, [files, bootAndMount, install, start]);
 
   const toggle = useCallback((id: string) => {
     setExpanded((prev) => {
@@ -107,7 +210,21 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
 
   const handleContentChange = useCallback((fileId: string, newValue: string) => {
     setEditedContents((prev) => ({ ...prev, [fileId]: newValue }));
-  }, []);
+    // Immediate: workspace (TS worker reads the Monaco model directly).
+    // Debounced ~400ms: container FS -> Vite HMR. DB persist stays manual (Save).
+    const target = filesRef.current.find((f) => f.id === fileId);
+    if (target && !target.isFolder) {
+      workspaceRef.current?.updateFile(target.path, newValue);
+      if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
+      const path = target.path;
+      writeTimerRef.current = setTimeout(() => {
+        if (!containerReadyRef.current) return;
+        runtime.writeFile(path, newValue).catch(() => {
+          toast.error("Sync to runtime failed");
+        });
+      }, 400);
+    }
+  }, [runtime]);
 
   const handleSave = useCallback(async () => {
     if (!activeFile) return;
@@ -130,13 +247,32 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
         return next;
       });
       toast.success("Saved");
+      // Ensure the container has the saved content (covers edits made
+      // before boot finished), then handle dependency changes.
+      void containerWrite(activeFile.path, currentValue);
+      if (activeFile.name === "package.json" && startedRef.current) {
+        const newHash = hashPackageJson(currentValue);
+        if (depHashRef.current && newHash !== depHashRef.current) {
+          depHashRef.current = newHash;
+          toast.info("Dependencies changed — reinstalling…");
+          try {
+            await install();
+            await runtime.restartDevServer();
+            toast.success("Dependencies updated");
+          } catch {
+            toast.error("Reinstall failed");
+          }
+        } else {
+          depHashRef.current = newHash;
+        }
+      }
       setTimeout(() => refresh({ silent: true }), 0);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save");
     } finally {
       setSaving(false);
     }
-  }, [activeFile, editedContents, projectId, refresh]);
+  }, [activeFile, editedContents, projectId, refresh, containerWrite, install, runtime]);
 
   const requestClose = useCallback((file: ProjectFile) => {
     const dirty = editedContents[file.id] !== undefined && editedContents[file.id] !== (file.content ?? "");
@@ -167,6 +303,7 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
           setFiles((prev) => prev.map((f) => (f.id === closeTarget.id ? updated : f)));
           setOpenFiles((prev) => prev.map((f) => (f.id === closeTarget.id ? updated : f)));
           toast.success("Saved");
+          void containerWrite(closeTarget.path, val);
         } catch (e) {
           toast.error(e instanceof Error ? e.message : "Failed to save");
           return;
@@ -187,7 +324,7 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
       setActiveFileId(remaining.length ? remaining.at(-1)?.id ?? null : null);
     }
     setCloseTarget(null);
-  }, [closeTarget, editedContents, projectId, openFiles, activeFileId]);
+  }, [closeTarget, editedContents, projectId, openFiles, activeFileId, containerWrite]);
 
   const handleCreate = useCallback(async (parentId: string | null, isFolder: boolean, name: string) => {
     const unique = getUniqueName(name, parentId, filesRef.current);
@@ -198,34 +335,78 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
       });
       const file: ProjectFile = (created as unknown as ProjectFile) ?? (created as unknown as { data: ProjectFile }).data ?? (created as unknown as ProjectFile);
       await refresh({ silent: true });
+      // Mirror into the container FS (best effort).
+      const createdPath =
+        (file as ProjectFile)?.path ??
+        (created as unknown as { data?: ProjectFile })?.data?.path;
+      if (createdPath && containerReadyRef.current) {
+        if (isFolder) {
+          runtime.mkdir(createdPath).catch(() => toast.error("Sync to runtime failed"));
+        } else {
+          void containerWrite(createdPath, "");
+        }
+      }
       if (parentId) setExpanded((s) => new Set(s).add(parentId));
       if (file?.id && !isFolder) handleOpenFile(file);
       toast.success(`${isFolder ? "Folder" : "File"} created`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to create");
     }
-  }, [projectId, pushHistory, refresh, handleOpenFile]);
+  }, [projectId, pushHistory, refresh, handleOpenFile, containerWrite, runtime]);
 
   const handleRename = useCallback(async (file: ProjectFile, newName: string) => {
     const trimmed = newName.trim();
     if (!trimmed || trimmed === file.name) return;
     const unique = getUniqueName(trimmed, file.parentId, filesRef.current.filter((f) => f.id !== file.id));
+    const oldPath = file.path;
+    const parentDir = dirOf(oldPath);
+    const newPath = parentDir ? `${parentDir}/${unique}` : unique;
+    // Unsaved edits travel with the rename so the container keeps latest.
+    const currentContent = editedContentsRef.current[file.id] ?? file.content ?? "";
+    const oldSubtree = file.isFolder
+      ? filesUnder(filesRef.current, oldPath).map((f) => f.path)
+      : [];
     pushHistory([...filesRef.current]);
     setFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, name: unique } : f)));
     setOpenFiles((prev) => prev.map((f) => (f.id === file.id ? { ...f, name: unique } : f)));
     try {
       await api.put(`/api/projects/${projectId}/files/${file.id}`, { name: unique });
-      await refresh({ silent: true });
+      const arr = await refresh({ silent: true });
+      if (containerReadyRef.current) {
+        if (file.isFolder) {
+          await containerRemove(oldPath);
+          for (const f of filesUnder(arr, newPath)) {
+            const pending = editedContentsRef.current[f.id];
+            await containerWrite(f.path, pending ?? f.content ?? "");
+          }
+        } else {
+          workspaceRef.current?.deleteFile(oldPath);
+          removeModelByPath(oldPath);
+          if (containerReadyRef.current) {
+            try {
+              await runtime.rm(oldPath, false);
+            } catch {
+              toast.error("Sync to runtime failed");
+            }
+          }
+          await containerWrite(newPath, currentContent);
+        }
+        // Drop stale models for renamed folder contents.
+        for (const p of oldSubtree) removeModelByPath(p);
+      }
       toast.success("Renamed");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Rename failed");
       await refresh({ silent: true });
     }
-  }, [projectId, pushHistory, refresh]);
+  }, [projectId, pushHistory, refresh, containerWrite, containerRemove, runtime]);
 
   const handleDelete = useCallback(async (file: ProjectFile) => {
     pushHistory([...filesRef.current]);
     const toRemove = new Set(collectDescendants(filesRef.current, file.id));
+    const removedPaths = filesRef.current
+      .filter((f) => toRemove.has(f.id) && !f.isFolder)
+      .map((f) => f.path);
     setFiles((prev) => prev.filter((f) => !toRemove.has(f.id)));
     setOpenFiles((prev) => prev.filter((f) => !toRemove.has(f.id)));
     // clear edited contents for removed files
@@ -241,16 +422,28 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
     try {
       await api.delete(`/api/projects/${projectId}/files/${file.id}`);
       await refresh({ silent: true });
+      if (containerReadyRef.current) {
+        for (const p of removedPaths) {
+          workspaceRef.current?.deleteFile(p);
+          removeModelByPath(p);
+        }
+        try {
+          await runtime.rm(file.path, true);
+        } catch {
+          toast.error("Sync to runtime failed");
+        }
+      }
       toast.success("Deleted");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Delete failed");
       await refresh({ silent: true });
     }
-  }, [projectId, pushHistory, refresh, activeFileId, openFiles]);
+  }, [projectId, pushHistory, refresh, activeFileId, openFiles, runtime]);
 
   const handleDuplicate = useCallback(async (file: ProjectFile) => {
     const parentId = file.parentId;
     const unique = getUniqueName(file.name, parentId, filesRef.current);
+    const newPath = childPath(filesRef.current, parentId, unique);
     pushHistory([...filesRef.current]);
     try {
       if (file.isFolder) {
@@ -264,12 +457,21 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
       } else {
         await api.post(`/api/projects/${projectId}/files`, { name: unique, parentId, isFolder: false, content: file.content });
       }
-      await refresh({ silent: true });
+      const arr = await refresh({ silent: true });
+      if (containerReadyRef.current) {
+        if (file.isFolder) {
+          for (const f of filesUnder(arr, newPath)) {
+            await containerWrite(f.path, f.content ?? "");
+          }
+        } else {
+          await containerWrite(newPath, file.content ?? "");
+        }
+      }
       toast.success("Duplicated");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Duplicate failed");
     }
-  }, [projectId, pushHistory, refresh]);
+  }, [projectId, pushHistory, refresh, containerWrite]);
 
   const handlePaste = useCallback(async (target: ProjectFile) => {
     if (!clipboard) return;
@@ -279,23 +481,48 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
       const isDesc = src.id === pasteParentId || isDescendant(filesRef.current, src.id, pasteParentId);
       if (isDesc) { toast.error("Cannot paste folder into itself"); return; }
     }
+    const oldPath = src.path;
+    const oldSubtree = src.isFolder
+      ? filesUnder(filesRef.current, oldPath).map((f) => f.path)
+      : [];
     pushHistory([...filesRef.current]);
+    let newPath: string | null = null;
     try {
       if (clipboard.op === "cut") {
         const unique = getUniqueName(src.name, pasteParentId, filesRef.current.filter((f) => f.id !== src.id));
+        newPath = childPath(filesRef.current, pasteParentId, unique);
         await api.put(`/api/projects/${projectId}/files/${src.id}/move`, { parentId: pasteParentId, name: unique });
         setClipboard(null);
       } else {
         const unique = getUniqueName(src.name, pasteParentId, filesRef.current);
+        newPath = childPath(filesRef.current, pasteParentId, unique);
         await api.post(`/api/projects/${projectId}/files`, { name: unique, parentId: pasteParentId, isFolder: src.isFolder, content: src.content });
       }
-      await refresh({ silent: true });
+      const arr = await refresh({ silent: true });
+      if (containerReadyRef.current && newPath) {
+        if (clipboard.op === "cut") {
+          await containerRemove(oldPath);
+          removeModelByPath(oldPath);
+          for (const p of oldSubtree) removeModelByPath(p);
+        }
+        if (src.isFolder) {
+          for (const f of filesUnder(arr, newPath)) {
+            const pending = editedContentsRef.current[f.id];
+            await containerWrite(f.path, pending ?? f.content ?? "");
+          }
+        } else {
+          const content = clipboard.op === "cut"
+            ? (editedContentsRef.current[src.id] ?? src.content ?? "")
+            : (src.content ?? "");
+          await containerWrite(newPath, content);
+        }
+      }
       if (pasteParentId) setExpanded((s) => new Set(s).add(pasteParentId));
       toast.success("Pasted");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Paste failed");
     }
-  }, [clipboard, projectId, pushHistory, refresh]);
+  }, [clipboard, projectId, pushHistory, refresh, containerWrite, containerRemove]);
 
   const handleAction = useCallback((action: string, file: ProjectFile) => {
     const resolveParent = (f: ProjectFile) => {
@@ -344,7 +571,7 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
         break;
       }
     }
-  }, [handleDelete, handleDuplicate, handlePaste]);
+  }, [handleDuplicate, handlePaste]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
