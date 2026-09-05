@@ -2,6 +2,7 @@
 
 import { AuthGuard } from "@/components/auth/auth-guard";
 import { EditorLayout } from "@/components/editor/editor-layout";
+import { EditorTopbar } from "@/components/editor/editor-topbar";
 import { use } from "react";
 
 interface ProjectEditorPageProps {
@@ -15,8 +16,11 @@ export default function ProjectEditorPage({ params }: ProjectEditorPageProps) {
 
   return (
     <AuthGuard>
-      <div className="h-screen w-full overflow-hidden">
-        <EditorLayout projectId={projectId} />
+      <div className="flex h-screen w-full flex-col overflow-hidden">
+        <EditorTopbar projectId={projectId} />
+        <div className="min-h-0 flex-1">
+          <EditorLayout projectId={projectId} />
+        </div>
       </div>
     </AuthGuard>
   );

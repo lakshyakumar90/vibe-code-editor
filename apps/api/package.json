@@ -12,8 +12,10 @@
     "build": "tsc"
   },
   "dependencies": {
+    "@paralleldrive/cuid2": "^3.3.0",
     "@repo/auth": "workspace:*",
     "@repo/db": "workspace:*",
+    "@repo/templates": "workspace:*",
     "better-auth": "^1.6.24",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",

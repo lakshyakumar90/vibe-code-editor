@@ -1,9 +1,12 @@
 import { ProjectRole } from "@repo/db";
+import type { TemplateManifest } from "@repo/templates";
+
+export type ProjectTemplate = TemplateManifest["id"];
 
 export interface CreateProjectInput {
   name: string;
   description?: string;
-  template: string;
+  template: ProjectTemplate;
   memberIds?: string[];
 };
 

@@ -81,6 +81,7 @@ model Project {
   ownerId String
   owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   template Template
+  templateVersion String @default("1.0.0")
   
   members ProjectMember[]
   files   File[]
@@ -129,7 +130,7 @@ model File {
   name String
 
   path    String
-  content String?
+  content String? @db.Text
 
   isFolder Boolean @default(false)
 

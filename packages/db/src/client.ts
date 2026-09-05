@@ -13,3 +13,4 @@ const prisma = new PrismaClient({
 })
 
 export { prisma };
+export { Prisma } from "../generated/prisma/client";

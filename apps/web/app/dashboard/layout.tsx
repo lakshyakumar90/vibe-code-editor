@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { DashboardSidebar } from "@/components/dashboard/dashboard-sidebar";
+import { isEditorPage } from "@/lib/is-editor-page";
 import { SidebarProvider } from "@repo/ui";
 
 export default function DashboardLayout({
@@ -10,9 +11,8 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const pathname = usePathname();
-  const isEditorPage = pathname.includes("/dashboard/projects/") && pathname.split("/").length > 3;
 
-  if (isEditorPage) {
+  if (isEditorPage(pathname)) {
     return <>{children}</>;
   }
 

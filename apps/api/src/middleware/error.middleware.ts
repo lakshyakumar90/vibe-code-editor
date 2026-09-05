@@ -1,5 +1,10 @@
 import { Request, Response, NextFunction } from "express";
 import { ZodError } from "zod";
+import { Prisma } from "@repo/db";
+
+// Transient connection/pool errors (Neon pooler cold starts, timeouts).
+// Safe to retry — never leak internals to the client.
+const RETRYABLE_DB_CODES = new Set(["P1001", "P1002", "P1017", "P2024", "P2028"]);
 
 export function errorHandler(
   err: unknown,
@@ -18,6 +23,17 @@ export function errorHandler(
         path: issue.path.join("."),
         message: issue.message,
       })),
+    });
+  }
+
+  if (
+    err instanceof Prisma.PrismaClientKnownRequestError &&
+    RETRYABLE_DB_CODES.has(err.code)
+  ) {
+    return res.status(503).json({
+      success: false,
+      code: "SERVICE_UNAVAILABLE",
+      message: "Database temporarily unavailable, please try again",
     });
   }
 

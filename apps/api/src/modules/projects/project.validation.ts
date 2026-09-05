@@ -2,6 +2,12 @@ import {z} from "zod";
 
 const templateEnum = z.enum(["REACT", "VUE", "HONO", "EXPRESS", "NEXTJS", "ANGULAR"]);
 
+// Accept "react", "React", " REACT " etc. — normalize before validating.
+const templateSchema = z.preprocess(
+  (v) => (typeof v === "string" ? v.trim().toUpperCase() : v),
+  templateEnum
+);
+
 export const createProjectSchema = z.object({
   name: z
     .string()
@@ -12,7 +18,7 @@ export const createProjectSchema = z.object({
     .string()
     .max(500, "Project description must be at most 500 characters long")
     .optional(),
-  template: templateEnum,
+  template: templateSchema,
   memberIds: z.array(z.string()).default([]),
 });
 

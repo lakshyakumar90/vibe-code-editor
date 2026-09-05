@@ -6,11 +6,25 @@ import { ProjectRole } from "@repo/db";
 export const projectController = {
   async createProject(req: Request, res: Response) {
     const input = createProjectSchema.parse(req.body);
-    const project = await projectService.createProject(req.user!.id, input);
-    return res.status(201).json({
-      success: true,
-      data: project,
-    });
+    try {
+      const project = await projectService.createProject(req.user!.id, input);
+      return res.status(201).json({
+        success: true,
+        data: project,
+      });
+    } catch (error) {
+      if (error instanceof Error && (error.message === "TEMPLATE_NOT_FOUND" || error.message === "TEMPLATE_EMPTY")) {
+        return res.status(400).json({
+          success: false,
+          code: error.message,
+          message:
+            error.message === "TEMPLATE_NOT_FOUND"
+              ? "Unknown project template"
+              : "Project template has no files to seed",
+        });
+      }
+      throw error;
+    }
   },
   
   async getAllProjects(req: Request, res: Response) { 

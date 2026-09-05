@@ -31,6 +31,7 @@ import {
   createProjectSchema,
   type CreateProjectInput,
 } from "@/lib/validations/project";
+import type { z } from "zod";
 import { useCreateProject } from "@/hooks/use-projects";
 
 interface CreateProjectFormProps {
@@ -52,7 +53,7 @@ export function CreateProjectForm({ onSuccess }: CreateProjectFormProps) {
   const [serverError, setServerError] = React.useState<string | null>(null);
   const [membersOpen, setMembersOpen] = React.useState(false);
 
-  const form = useForm<CreateProjectInput>({
+  const form = useForm<z.input<typeof createProjectSchema>, unknown, CreateProjectInput>({
     resolver: zodResolver(createProjectSchema),
     defaultValues: {
       name: "",

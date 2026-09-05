@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import { User, LogOut, Settings } from "lucide-react";
 
 import { AuthClient } from "@/lib/auth-client";
+import { isEditorPage } from "@/lib/is-editor-page";
 import { ModeToggle } from "./theme-mode-toggle";
 
 import {
@@ -24,6 +26,11 @@ import { Button } from "@repo/ui";
 
 export function Navbar() {
   const { data: session, isPending } = AuthClient.useSession();
+  const pathname = usePathname();
+
+  // The editor page has its own topbar — the floating navbar would
+  // overlay the editor and swallow clicks.
+  if (isEditorPage(pathname)) return null;
 
   return (
     <header className="fixed top-4 left-0 z-50 w-full px-4">
