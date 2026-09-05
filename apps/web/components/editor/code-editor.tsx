@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import Editor from "@monaco-editor/react";
+import { useTheme } from "next-themes";
 import { api } from "@/lib/api";
 import type { ProjectFile } from "@/types/file";
 import { getLanguage } from "@/lib/file-icons";
@@ -20,6 +21,9 @@ export function CodeEditor({ projectId, file, value, onChange, onSave, saving }:
   const valueRef = useRef(value);
   valueRef.current = value;
   const editorRef = useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
+  const { resolvedTheme } = useTheme();
+  // resolvedTheme is undefined pre-mount — default to light to match SSR (no `dark` class on server).
+  const monacoTheme = resolvedTheme === "dark" ? "vs-dark" : "vs";
 
   // global Ctrl+S
   useEffect(() => {
@@ -45,7 +49,7 @@ export function CodeEditor({ projectId, file, value, onChange, onSave, saving }:
           height="100%"
           path={file.path}
           defaultValue={value}
-          theme="vs"
+          theme={monacoTheme}
           language={getLanguage(file.name)}
           onChange={(nextValue) => {
             onChange(nextValue ?? "");
