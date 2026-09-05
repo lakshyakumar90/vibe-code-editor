@@ -11,6 +11,27 @@ import type { ContainerDbFile } from "./types";
 export type { TemplateId };
 export type OutputHandler = (data: string) => void;
 
+const TEMPLATE_IDS: readonly TemplateId[] = [
+  "REACT",
+  "VUE",
+  "HONO",
+  "EXPRESS",
+  "NEXTJS",
+  "ANGULAR",
+];
+
+/** Validate an unknown template value (e.g. from the project API). */
+export function parseTemplateId(value: unknown): TemplateId {
+  return TEMPLATE_IDS.includes(value as TemplateId)
+    ? (value as TemplateId)
+    : "REACT";
+}
+
+/** Templates whose language service is React-based (react typings apply). */
+export function isReactFamily(template: string): boolean {
+  return template === "REACT" || template === "NEXTJS";
+}
+
 export interface ShellHandle {
   write(data: string): void;
   resize(cols: number, rows: number): void;

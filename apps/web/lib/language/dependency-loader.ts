@@ -1,6 +1,7 @@
 import type * as Monaco from "monaco-editor";
 import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import type { ProjectRuntime } from "@/lib/webcontainer/runtime";
+import { isReactFamily } from "@/lib/webcontainer/runtime";
 import { workspaceToMonacoUri } from "@/lib/workspace/paths";
 import { getSharedMonaco } from "./model-manager";
 
@@ -30,6 +31,12 @@ let loadedHash = "";
 let loading = false;
 let pending: PendingLoad | null = null;
 let extraLibs: Array<{ dispose(): void }> = [];
+let activeTemplate = "REACT";
+
+/** Template context for type loading (set by EditorLayout on boot). */
+export function setActiveTemplate(template: string): void {
+  activeTemplate = template;
+}
 
 async function readContainerText(
   runtime: ProjectRuntime,
@@ -150,6 +157,14 @@ export async function ensureDependencyTypes(
 ): Promise<void> {
   const hash = hashPackageJson(packageJsonContent);
   if (hash === loadedHash) return;
+
+  // Non-React templates have no react typings to load (their framework
+  // language services are a V2 milestone). Mark done to avoid FS probes.
+  if (!isReactFamily(activeTemplate)) {
+    loadedHash = hash;
+    pending = null;
+    return;
+  }
 
   const monaco = getSharedMonaco();
   if (!monaco || loading) {

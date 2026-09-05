@@ -12,6 +12,7 @@ import { buildPathToId } from "@/lib/workspace/file-map";
 import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import { removeModelByPath } from "@/lib/language/model-manager";
 import { ensureDependencyTypes } from "@/lib/language/dependency-loader";
+import { setActiveTemplate } from "@/lib/language/dependency-loader";
 import { useRuntime } from "./runtime-provider";
 import { toast } from "sonner";
 import {
@@ -28,6 +29,8 @@ import { X, Circle } from "lucide-react";
 
 interface EditorLayoutProps {
   projectId: string;
+  /** Project template — drives runtime commands + TS config. */
+  template?: string;
 }
 
 interface FilesResponse {
@@ -59,7 +62,7 @@ function filesUnder(files: ProjectFile[], dir: string): ProjectFile[] {
   );
 }
 
-export function EditorLayout({ projectId }: EditorLayoutProps) {
+export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProps) {
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [openFiles, setOpenFiles] = useState<ProjectFile[]>([]);
@@ -169,6 +172,7 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
     const snapshot = [...files];
     workspaceRef.current = createWorkspace(snapshot);
     pathToIdRef.current = buildPathToId(snapshot);
+    setActiveTemplate(template);
     void (async () => {
       try {
         await bootAndMount(snapshot.map((f) => ({ path: f.path, content: f.content })));
@@ -188,7 +192,7 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
         containerReadyRef.current = false;
       }
     })();
-  }, [files, bootAndMount, install, start, runtime]);
+  }, [files, bootAndMount, install, start, runtime, template]);
 
   const toggle = useCallback((id: string) => {
     setExpanded((prev) => {
@@ -480,7 +484,7 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
 
   const handlePaste = useCallback(async (target: ProjectFile) => {
     if (!clipboard) return;
-    const pasteParentId = getPasteParentId(target, filesRef.current);
+    const pasteParentId = getPasteParentId(target);
     const src = clipboard.file;
     if (src.isFolder && pasteParentId) {
       const isDesc = src.id === pasteParentId || isDescendant(filesRef.current, src.id, pasteParentId);
@@ -721,6 +725,7 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
               onChange={(v) => handleContentChange(activeFile.id, v)}
               onSave={handleSave}
               saving={saving}
+              template={template}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a file to begin editing.</div>

@@ -14,7 +14,7 @@ export function getUniqueName(desired: string, parentId: string | null, files: P
   }
 }
 
-export function getPasteParentId(target: ProjectFile, _files: ProjectFile[]): string | null {
+export function getPasteParentId(target: ProjectFile): string | null {
   // folder -> children, file -> sibling (same parent)
   if (target.isFolder) return target.id;
   return target.parentId;
