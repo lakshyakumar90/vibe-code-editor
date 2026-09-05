@@ -13,9 +13,11 @@
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
     "@monaco-editor/react": "^4.7.0",
+    "@repo/templates": "workspace:^",
     "@repo/ui": "workspace:*",
     "@repo/validation": "workspace:*",
     "@tailwindcss/postcss": "^4.3.3",
+    "@webcontainer/api": "^1.6.4",
     "better-auth": "^1.6.24",
     "clsx": "^2.1.1",
     "lucide-react": "^1.26.0",
