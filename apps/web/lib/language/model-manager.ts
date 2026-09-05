@@ -12,6 +12,10 @@ export function setSharedMonaco(monaco: MonacoInstance): void {
   sharedMonaco = monaco;
 }
 
+export function getSharedMonaco(): MonacoInstance | null {
+  return sharedMonaco;
+}
+
 /**
  * Step 6 — one-time TypeScript worker configuration.
  * Safe to call from every onMount; only the first call applies.

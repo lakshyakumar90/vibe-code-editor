@@ -11,6 +11,7 @@ import { createWorkspace, type VirtualWorkspace } from "@/lib/workspace/workspac
 import { buildPathToId } from "@/lib/workspace/file-map";
 import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import { removeModelByPath } from "@/lib/language/model-manager";
+import { ensureDependencyTypes } from "@/lib/language/dependency-loader";
 import { useRuntime } from "./runtime-provider";
 import { toast } from "sonner";
 import {
@@ -173,9 +174,12 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
         await bootAndMount(snapshot.map((f) => ({ path: f.path, content: f.content })));
         containerReadyRef.current = true;
         await install();
-        depHashRef.current = hashPackageJson(
-          workspaceRef.current?.getFile("package.json") ?? "",
-        );
+        const packageJson =
+          workspaceRef.current?.getFile("package.json") ?? "";
+        depHashRef.current = hashPackageJson(packageJson);
+        // Types need both install output (node_modules) and a mounted
+        // Monaco instance; the loader defers itself if editor isn't up yet.
+        void ensureDependencyTypes(runtime, packageJson);
         await start();
         startedRef.current = true;
       } catch {
@@ -184,7 +188,7 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
         containerReadyRef.current = false;
       }
     })();
-  }, [files, bootAndMount, install, start]);
+  }, [files, bootAndMount, install, start, runtime]);
 
   const toggle = useCallback((id: string) => {
     setExpanded((prev) => {
@@ -258,6 +262,7 @@ export function EditorLayout({ projectId }: EditorLayoutProps) {
           try {
             await install();
             await runtime.restartDevServer();
+            void ensureDependencyTypes(runtime, currentValue);
             toast.success("Dependencies updated");
           } catch {
             toast.error("Reinstall failed");

@@ -6,6 +6,7 @@ import { useTheme } from "next-themes";
 import type { ProjectFile } from "@/types/file";
 import { getLanguage } from "@/lib/file-icons";
 import { ensureModel, initLanguage, setSharedMonaco } from "@/lib/language/model-manager";
+import { flushPendingDependencyTypes } from "@/lib/language/dependency-loader";
 
 interface CodeEditorProps {
   projectId: string;
@@ -54,6 +55,7 @@ export function CodeEditor({
     monacoRef.current = monaco;
     setSharedMonaco(monaco);
     initLanguage(monaco, template);
+    flushPendingDependencyTypes();
     if (file) {
       activePathRef.current = file.path;
       editor.setModel(

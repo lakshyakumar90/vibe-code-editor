@@ -11,6 +11,13 @@ import type { ContainerDbFile } from "./types";
 export type { TemplateId };
 export type OutputHandler = (data: string) => void;
 
+export interface ShellHandle {
+  write(data: string): void;
+  resize(cols: number, rows: number): void;
+  kill(): void;
+  onExit: Promise<number>;
+}
+
 async function pipeOutput(
   stream: ReadableStream<string>,
   onOutput?: OutputHandler,
@@ -95,6 +102,60 @@ export class ProjectRuntime {
       this.devProcess = null;
     }
     await this.startDevServer(this.devOutput);
+  }
+
+  /** Interactive shell (`jsh`) for the xterm terminal panel. */
+  async spawnShell(
+    cols: number,
+    rows: number,
+    onOutput?: OutputHandler,
+  ): Promise<ShellHandle> {
+    const container = await this.boot();
+    const proc = await container.spawn("jsh", [], {
+      terminal: { cols, rows },
+    });
+    void pipeOutput(proc.output, onOutput);
+
+    const writer = proc.input.getWriter();
+    let closed = false;
+    const release = () => {
+      try {
+        writer.releaseLock();
+      } catch {
+        // already released
+      }
+    };
+    void proc.exit.then(() => {
+      closed = true;
+      release();
+    });
+
+    return {
+      write: (data: string) => {
+        if (!closed) {
+          writer.write(data).catch(() => {
+            // shell gone — output stream already ended
+          });
+        }
+      },
+      resize: (c: number, r: number) => {
+        try {
+          proc.resize({ cols: c, rows: r });
+        } catch {
+          // shell gone
+        }
+      },
+      kill: () => {
+        closed = true;
+        try {
+          proc.kill();
+        } catch {
+          // already exited
+        }
+        release();
+      },
+      onExit: proc.exit,
+    };
   }
 
   onServerReady(cb: (port: number, url: string) => void): void {
