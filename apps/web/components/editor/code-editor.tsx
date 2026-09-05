@@ -5,7 +5,7 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { useTheme } from "next-themes";
 import type { ProjectFile } from "@/types/file";
 import { getLanguage } from "@/lib/file-icons";
-import { ensureModel, initLanguage, setSharedMonaco } from "@/lib/language/model-manager";
+import { ensureModel, initLanguage, setSharedEditor, setSharedMonaco } from "@/lib/language/model-manager";
 import { flushPendingDependencyTypes } from "@/lib/language/dependency-loader";
 
 interface CodeEditorProps {
@@ -54,6 +54,7 @@ export function CodeEditor({
     editorRef.current = editor;
     monacoRef.current = monaco;
     setSharedMonaco(monaco);
+    setSharedEditor(editor);
     initLanguage(monaco, template);
     flushPendingDependencyTypes();
     if (file) {

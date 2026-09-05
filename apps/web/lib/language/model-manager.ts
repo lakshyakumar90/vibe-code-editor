@@ -16,6 +16,39 @@ export function getSharedMonaco(): MonacoInstance | null {
   return sharedMonaco;
 }
 
+let sharedEditor: Monaco.editor.IStandaloneCodeEditor | null = null;
+
+/** Active editor instance (set by CodeEditor onMount). */
+export function setSharedEditor(
+  editor: Monaco.editor.IStandaloneCodeEditor | null,
+): void {
+  sharedEditor = editor;
+}
+
+export function getSharedEditor(): Monaco.editor.IStandaloneCodeEditor | null {
+  return sharedEditor;
+}
+
+/**
+ * Focus the editor on a file + position (used by the Problems panel).
+ * No-op if the model isn't materialized yet.
+ */
+export function revealInEditor(
+  dbPath: string,
+  lineNumber: number,
+  column: number,
+): void {
+  if (!sharedMonaco || !sharedEditor) return;
+  const model = getModel(sharedMonaco, dbPath);
+  if (!model) return;
+  if (sharedEditor.getModel() !== model) {
+    sharedEditor.setModel(model);
+  }
+  sharedEditor.revealPositionInCenter({ lineNumber, column });
+  sharedEditor.setPosition({ lineNumber, column });
+  sharedEditor.focus();
+}
+
 /**
  * Step 6 — one-time TypeScript worker configuration.
  * Safe to call from every onMount; only the first call applies.

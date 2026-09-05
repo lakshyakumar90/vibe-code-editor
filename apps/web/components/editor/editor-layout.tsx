@@ -13,6 +13,9 @@ import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import { removeModelByPath } from "@/lib/language/model-manager";
 import { ensureDependencyTypes } from "@/lib/language/dependency-loader";
 import { setActiveTemplate } from "@/lib/language/dependency-loader";
+import { revealInEditor } from "@/lib/language/model-manager";
+import { ProblemsPanel } from "./problems-panel";
+import type { Problem } from "@/lib/language/diagnostics";
 import { useRuntime } from "./runtime-provider";
 import { toast } from "sonner";
 import {
@@ -79,6 +82,8 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
   const [closeTarget, setCloseTarget] = useState<ProjectFile | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(288);
   const [isResizing, setIsResizing] = useState(false);
+  const [showProblems, setShowProblems] = useState(true);
+  const [problemCounts, setProblemCounts] = useState({ errors: 0, warnings: 0 });
   const filesRef = useRef(files);
   filesRef.current = files;
   const editedContentsRef = useRef(editedContents);
@@ -214,6 +219,24 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
 
   const handleTabClick = useCallback((fileId: string) => {
     setActiveFileId(fileId);
+  }, []);
+
+  const handleSelectProblem = useCallback((problem: Problem) => {
+    const target = filesRef.current.find(
+      (f) => !f.isFolder && f.path === problem.dbPath,
+    );
+    if (!target) {
+      toast.error(`File not found: ${problem.dbPath}`);
+      return;
+    }
+    setOpenFiles((prev) =>
+      prev.some((f) => f.id === target.id) ? prev : [...prev, target],
+    );
+    setActiveFileId(target.id);
+    // Let the editor swap to the file's model, then jump to the marker.
+    const { line, column, dbPath } = problem;
+    setTimeout(() => revealInEditor(dbPath, line, column), 100);
+    setTimeout(() => revealInEditor(dbPath, line, column), 400);
   }, []);
 
   const handleContentChange = useCallback((fileId: string, newValue: string) => {
@@ -704,6 +727,15 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
         )}
         {activeFile && (
           <div className="flex h-8 shrink-0 items-center justify-end gap-3 border-b bg-background px-4 text-xs">
+            <button
+              onClick={() => setShowProblems((v) => !v)}
+              className={`rounded px-2 py-1 ${showProblems ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+              title="Toggle Problems panel"
+            >
+              Problems
+              {problemCounts.errors + problemCounts.warnings > 0 &&
+                ` (${problemCounts.errors + problemCounts.warnings})`}
+            </button>
             <span className={saving ? "text-muted-foreground" : isActiveDirty ? "text-yellow-600" : "text-muted-foreground"}>
               {saving ? "Saving..." : isActiveDirty ? "● Unsaved" : "Saved"}
             </span>
@@ -731,6 +763,17 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a file to begin editing.</div>
           )}
         </div>
+        {showProblems && (
+          <div className="h-44 shrink-0 border-t bg-background">
+            <ProblemsPanel
+              onSelectProblem={handleSelectProblem}
+              refreshToken={openFiles.length}
+              onCountChange={(errors, warnings) =>
+                setProblemCounts({ errors, warnings })
+              }
+            />
+          </div>
+        )}
       </main>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
