@@ -1,7 +1,6 @@
 import type * as Monaco from "monaco-editor";
 import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import type { ProjectRuntime } from "@/lib/webcontainer/runtime";
-import { isReactFamily } from "@/lib/webcontainer/runtime";
 import { workspaceToMonacoUri } from "@/lib/workspace/paths";
 import { getSharedMonaco } from "./model-manager";
 
@@ -14,13 +13,29 @@ import { getSharedMonaco } from "./model-manager";
  * via `addExtraLib` at `file:///project/node_modules/...` paths so the
  * worker's Node-style resolution finds them natively.
  *
- * V1 scope: react, react-dom, @types/react, @types/react-dom (+ react
- * jsx runtimes). Transitive dep-of-dep types (e.g. csstype) are a follow-up.
- * `skipLibCheck` (see ts-config) keeps missing transitive refs from
- * surfacing as errors.
+ * Roots are per-template, plus one level of transitive dependencies
+ * (e.g. `csstype` via `@types/react`, `mime` via `express`), capped so a
+ * huge graph can't stall the UI. `skipLibCheck` (see ts-config) keeps any
+ * remaining gaps from surfacing as errors.
  */
 
-const CORE_PKGS = ["react", "react-dom", "@types/react", "@types/react-dom"];
+/** Root type packages per template. Null = deferred to a V2 language service. */
+function getRootTypePackages(template: string): string[] | null {
+  switch (template) {
+    case "REACT":
+    case "NEXTJS":
+      return ["react", "react-dom", "@types/react", "@types/react-dom"];
+    case "EXPRESS":
+      return ["express", "@types/express", "@types/node"];
+    case "HONO":
+      return ["hono", "@types/node"];
+    default:
+      return null;
+  }
+}
+
+/** Max packages to probe per load (roots + one transitive level). */
+const MAX_PACKAGES = 15;
 
 interface PendingLoad {
   runtime: ProjectRuntime;
@@ -56,23 +71,39 @@ function cleanEntry(entry: string): string {
   return entry.replace(/^\.\//, "");
 }
 
-/** Main declaration file(s) for one installed package. */
+interface ResolvedPackage {
+  files: Array<{ monacoPath: string; content: string }>;
+  /** Runtime dependency names (for one-level transitive follow). */
+  depNames: string[];
+}
+
+/** Main declaration file(s) + dependency names for one installed package. */
 async function resolveDeclarationFiles(
   runtime: ProjectRuntime,
   pkg: string,
-): Promise<Array<{ monacoPath: string; content: string }>> {
+): Promise<ResolvedPackage> {
+  const none: ResolvedPackage = { files: [], depNames: [] };
   const metaRaw = await readContainerText(
     runtime,
     `/node_modules/${pkg}/package.json`,
   );
-  if (!metaRaw) return [];
+  if (!metaRaw) return none;
 
-  let meta: { types?: unknown; typings?: unknown };
+  let meta: { types?: unknown; typings?: unknown; dependencies?: unknown };
   try {
-    meta = JSON.parse(metaRaw) as { types?: unknown; typings?: unknown };
+    meta = JSON.parse(metaRaw) as {
+      types?: unknown;
+      typings?: unknown;
+      dependencies?: unknown;
+    };
   } catch {
-    return [];
+    return none;
   }
+
+  const depNames =
+    meta.dependencies && typeof meta.dependencies === "object"
+      ? Object.keys(meta.dependencies as Record<string, unknown>)
+      : [];
 
   const candidates: string[] = [];
   if (typeof meta.types === "string") candidates.push(cleanEntry(meta.types));
@@ -81,14 +112,14 @@ async function resolveDeclarationFiles(
   }
   candidates.push("index.d.ts");
 
-  const out: Array<{ monacoPath: string; content: string }> = [];
+  const files: ResolvedPackage["files"] = [];
   for (const candidate of candidates) {
     const content = await readContainerText(
       runtime,
       `/node_modules/${pkg}/${candidate}`,
     );
     if (content !== null) {
-      out.push({
+      files.push({
         monacoPath: workspaceToMonacoUri(`node_modules/${pkg}/${candidate}`),
         content,
       });
@@ -105,7 +136,7 @@ async function resolveDeclarationFiles(
         `/node_modules/react/${extra}`,
       );
       if (content !== null) {
-        out.push({
+        files.push({
           monacoPath: workspaceToMonacoUri(`node_modules/react/${extra}`),
           content,
         });
@@ -113,12 +144,13 @@ async function resolveDeclarationFiles(
     }
   }
 
-  return out;
+  return { files, depNames };
 }
 
 async function loadDependencyTypes(
   monaco: typeof Monaco,
   runtime: ProjectRuntime,
+  roots: string[],
 ): Promise<number> {
   for (const lib of extraLibs) {
     try {
@@ -129,10 +161,21 @@ async function loadDependencyTypes(
   }
   extraLibs = [];
 
+  // Roots first, then one transitive level (deps of roots only).
+  const visited = new Set<string>();
+  const queue: Array<{ pkg: string; depth: number }> = roots.map((pkg) => ({
+    pkg,
+    depth: 0,
+  }));
+
   let count = 0;
-  for (const pkg of CORE_PKGS) {
-    const files = await resolveDeclarationFiles(runtime, pkg);
-    for (const file of files) {
+  while (queue.length > 0 && visited.size < MAX_PACKAGES) {
+    const { pkg, depth } = queue.shift()!;
+    if (visited.has(pkg)) continue;
+    visited.add(pkg);
+
+    const resolved = await resolveDeclarationFiles(runtime, pkg);
+    for (const file of resolved.files) {
       extraLibs.push(
         monaco.typescript.typescriptDefaults.addExtraLib(
           file.content,
@@ -140,6 +183,11 @@ async function loadDependencyTypes(
         ),
       );
       count++;
+    }
+    if (depth === 0) {
+      for (const dep of resolved.depNames) {
+        if (!visited.has(dep)) queue.push({ pkg: dep, depth: 1 });
+      }
     }
   }
   return count;
@@ -158,9 +206,10 @@ export async function ensureDependencyTypes(
   const hash = hashPackageJson(packageJsonContent);
   if (hash === loadedHash) return;
 
-  // Non-React templates have no react typings to load (their framework
-  // language services are a V2 milestone). Mark done to avoid FS probes.
-  if (!isReactFamily(activeTemplate)) {
+  // Templates without a V1 type strategy (Vue/Angular language services
+  // are a V2 milestone). Mark done to avoid FS probes.
+  const roots = getRootTypePackages(activeTemplate);
+  if (!roots) {
     loadedHash = hash;
     pending = null;
     return;
@@ -174,7 +223,7 @@ export async function ensureDependencyTypes(
 
   loading = true;
   try {
-    await loadDependencyTypes(monaco, runtime);
+    await loadDependencyTypes(monaco, runtime, roots);
     loadedHash = hash;
   } finally {
     loading = false;
