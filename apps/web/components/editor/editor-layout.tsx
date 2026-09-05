@@ -6,11 +6,13 @@ import { FileTree } from "./file-tree";
 import { CodeEditor } from "./code-editor";
 import { api } from "@/lib/api";
 import { getUniqueName, getPasteParentId, collectDescendants } from "@/lib/file-utils";
-import { getFileIcon } from "@/lib/file-icons";
+import { getFileIcon, getLanguage } from "@/lib/file-icons";
 import { createWorkspace, type VirtualWorkspace } from "@/lib/workspace/workspace";
 import { buildPathToId } from "@/lib/workspace/file-map";
 import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import { removeModelByPath } from "@/lib/language/model-manager";
+import { ensureModel, getSharedMonaco, requestLanguageSetup } from "@/lib/language/model-manager";
+import { loadProjectTsconfig } from "@/lib/language/tsconfig-loader";
 import { ensureDependencyTypes } from "@/lib/language/dependency-loader";
 import { setActiveTemplate } from "@/lib/language/dependency-loader";
 import { revealInEditor } from "@/lib/language/model-manager";
@@ -84,13 +86,15 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
   const [isResizing, setIsResizing] = useState(false);
   const [showProblems, setShowProblems] = useState(true);
   const [problemCounts, setProblemCounts] = useState({ errors: 0, warnings: 0 });
+  const [problemsHeight, setProblemsHeight] = useState(176);
+  const [isResizingProblems, setIsResizingProblems] = useState(false);
   const filesRef = useRef(files);
   filesRef.current = files;
   const editedContentsRef = useRef(editedContents);
   editedContentsRef.current = editedContents;
 
   // --- WebContainer / workspace sync (Steps 0+1+6) ---
-  const { runtime, bootAndMount, install, start } = useRuntime();
+  const { runtime, bootAndMount, install, start, status: runtimeStatus } = useRuntime();
   const workspaceRef = useRef<VirtualWorkspace | null>(null);
   const pathToIdRef = useRef<Map<string, string>>(new Map());
   const bootedRef = useRef(false);
@@ -117,6 +121,23 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
       }
     },
     [runtime],
+  );
+
+  /**
+   * Keep the language graph complete on structural ops: materialize a
+   * model for newly created paths (no-op when the editor never mounted).
+   */
+  const ensureFileModel = useCallback(
+    (path: string, content: string, name: string) => {
+      const monaco = getSharedMonaco();
+      if (!monaco) return;
+      try {
+        ensureModel(monaco, path, content, getLanguage(name));
+      } catch {
+        // Best effort — opening the file later self-heals.
+      }
+    },
+    [],
   );
 
   const containerRemove = useCallback(
@@ -169,18 +190,35 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // Boot the runtime once files arrive: workspace -> mount -> install -> dev.
+  // Boot the runtime once files arrive: workspace -> language setup
+  // (project tsconfig + full model preload) -> mount -> install -> dev.
   // Structural edits later only mirror (no reinstall/remount).
+  // Re-runs after a provider reset() (status back to idle) for manual retry.
   useEffect(() => {
     if (files.length === 0 || bootedRef.current) return;
+    if (runtimeStatus !== "idle") return;
     bootedRef.current = true;
     const snapshot = [...files];
     workspaceRef.current = createWorkspace(snapshot);
     pathToIdRef.current = buildPathToId(snapshot);
     setActiveTemplate(template);
+    // Phase 1 + Phase 2: project tsconfig becomes the worker config and
+    // every source file becomes a model — deferred until Monaco mounts.
+    // Supplier re-reads live state so content is never stale.
+    const tsconfig = loadProjectTsconfig(workspaceRef.current);
+    requestLanguageSetup(tsconfig.compilerOptions, template, () =>
+      filesRef.current
+        .filter((f) => !f.isFolder)
+        .map((f) => ({
+          path: f.path,
+          content:
+            editedContentsRef.current[f.id] ?? f.content ?? "",
+          language: getLanguage(f.name),
+        })),
+    );
     void (async () => {
       try {
-        await bootAndMount(snapshot.map((f) => ({ path: f.path, content: f.content })));
+        await bootAndMount(snapshot.map((f) => ({ path: f.path, content: f.content, isFolder: f.isFolder })));
         containerReadyRef.current = true;
         await install();
         const packageJson =
@@ -197,7 +235,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
         containerReadyRef.current = false;
       }
     })();
-  }, [files, bootAndMount, install, start, runtime, template]);
+  }, [files, bootAndMount, install, start, runtime, template, runtimeStatus]);
 
   const toggle = useCallback((id: string) => {
     setExpanded((prev) => {
@@ -257,6 +295,26 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     }
   }, [runtime]);
 
+  /** Reinstall + restart when package.json content actually changed. */
+  const maybeReinstall = useCallback(async (file: ProjectFile, content: string) => {
+    if (file.name !== "package.json" || !startedRef.current) return;
+    const newHash = hashPackageJson(content);
+    if (depHashRef.current && newHash !== depHashRef.current) {
+      depHashRef.current = newHash;
+      toast.info("Dependencies changed — reinstalling…");
+      try {
+        await install();
+        await runtime.restartDevServer();
+        void ensureDependencyTypes(runtime, content);
+        toast.success("Dependencies updated");
+      } catch {
+        toast.error("Reinstall failed");
+      }
+    } else {
+      depHashRef.current = newHash;
+    }
+  }, [install, runtime]);
+
   const handleSave = useCallback(async () => {
     if (!activeFile) return;
     const currentValue = editedContents[activeFile.id];
@@ -281,30 +339,45 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
       // Ensure the container has the saved content (covers edits made
       // before boot finished), then handle dependency changes.
       void containerWrite(activeFile.path, currentValue);
-      if (activeFile.name === "package.json" && startedRef.current) {
-        const newHash = hashPackageJson(currentValue);
-        if (depHashRef.current && newHash !== depHashRef.current) {
-          depHashRef.current = newHash;
-          toast.info("Dependencies changed — reinstalling…");
-          try {
-            await install();
-            await runtime.restartDevServer();
-            void ensureDependencyTypes(runtime, currentValue);
-            toast.success("Dependencies updated");
-          } catch {
-            toast.error("Reinstall failed");
-          }
-        } else {
-          depHashRef.current = newHash;
-        }
-      }
+      await maybeReinstall(activeFile, currentValue);
       setTimeout(() => refresh({ silent: true }), 0);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save");
     } finally {
       setSaving(false);
     }
-  }, [activeFile, editedContents, projectId, refresh, containerWrite, install, runtime]);
+  }, [activeFile, editedContents, projectId, refresh, containerWrite, maybeReinstall]);
+
+  /** Persist every dirty open file (PUT per file, one refresh at the end). */
+  const handleSaveAll = useCallback(async () => {
+    const entries = Object.entries(editedContentsRef.current);
+    if (entries.length === 0) {
+      toast.info("No changes to save");
+      return;
+    }
+    try {
+      setSaving(true);
+      let saved = 0;
+      for (const [fileId, content] of entries) {
+        const file = filesRef.current.find((f) => f.id === fileId);
+        if (!file || file.isFolder || content === (file.content ?? "")) continue;
+        await api.put(`/api/projects/${projectId}/files/${fileId}`, { content });
+        const updated = { ...file, content } as ProjectFile;
+        setFiles((prev) => prev.map((f) => (f.id === fileId ? updated : f)));
+        setOpenFiles((prev) => prev.map((f) => (f.id === fileId ? updated : f)));
+        void containerWrite(file.path, content);
+        await maybeReinstall(file, content);
+        saved++;
+      }
+      setEditedContents({});
+      toast.success(saved === 1 ? "Saved 1 file" : `Saved ${saved} files`);
+      setTimeout(() => refresh({ silent: true }), 0);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save all");
+    } finally {
+      setSaving(false);
+    }
+  }, [projectId, refresh, containerWrite, maybeReinstall]);
 
   const requestClose = useCallback((file: ProjectFile) => {
     const dirty = editedContents[file.id] !== undefined && editedContents[file.id] !== (file.content ?? "");
@@ -376,6 +449,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
           runtime.mkdir(createdPath).catch(() => toast.error("Sync to runtime failed"));
         } else {
           void containerWrite(createdPath, "");
+          ensureFileModel(createdPath, "", unique);
         }
       }
       if (parentId) setExpanded((s) => new Set(s).add(parentId));
@@ -384,7 +458,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to create");
     }
-  }, [projectId, pushHistory, refresh, handleOpenFile, containerWrite, runtime]);
+  }, [projectId, pushHistory, refresh, handleOpenFile, containerWrite, runtime, ensureFileModel]);
 
   const handleRename = useCallback(async (file: ProjectFile, newName: string) => {
     const trimmed = newName.trim();
@@ -409,7 +483,9 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
           await containerRemove(oldPath);
           for (const f of filesUnder(arr, newPath)) {
             const pending = editedContentsRef.current[f.id];
-            await containerWrite(f.path, pending ?? f.content ?? "");
+            const content = pending ?? f.content ?? "";
+            await containerWrite(f.path, content);
+            ensureFileModel(f.path, content, f.name);
           }
         } else {
           workspaceRef.current?.deleteFile(oldPath);
@@ -422,6 +498,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
             }
           }
           await containerWrite(newPath, currentContent);
+          ensureFileModel(newPath, currentContent, unique);
         }
         // Drop stale models for renamed folder contents.
         for (const p of oldSubtree) removeModelByPath(p);
@@ -431,7 +508,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
       toast.error(e instanceof Error ? e.message : "Rename failed");
       await refresh({ silent: true });
     }
-  }, [projectId, pushHistory, refresh, containerWrite, containerRemove, runtime]);
+  }, [projectId, pushHistory, refresh, containerWrite, containerRemove, runtime, ensureFileModel]);
 
   const handleDelete = useCallback(async (file: ProjectFile) => {
     pushHistory([...filesRef.current]);
@@ -494,16 +571,18 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
         if (file.isFolder) {
           for (const f of filesUnder(arr, newPath)) {
             await containerWrite(f.path, f.content ?? "");
+            ensureFileModel(f.path, f.content ?? "", f.name);
           }
         } else {
           await containerWrite(newPath, file.content ?? "");
+          ensureFileModel(newPath, file.content ?? "", unique);
         }
       }
       toast.success("Duplicated");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Duplicate failed");
     }
-  }, [projectId, pushHistory, refresh, containerWrite]);
+  }, [projectId, pushHistory, refresh, containerWrite, ensureFileModel]);
 
   const handlePaste = useCallback(async (target: ProjectFile) => {
     if (!clipboard) return;
@@ -540,13 +619,16 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
         if (src.isFolder) {
           for (const f of filesUnder(arr, newPath)) {
             const pending = editedContentsRef.current[f.id];
-            await containerWrite(f.path, pending ?? f.content ?? "");
+            const content = pending ?? f.content ?? "";
+            await containerWrite(f.path, content);
+            ensureFileModel(f.path, content, f.name);
           }
         } else {
           const content = clipboard.op === "cut"
             ? (editedContentsRef.current[src.id] ?? src.content ?? "")
             : (src.content ?? "");
           await containerWrite(newPath, content);
+          ensureFileModel(newPath, content, src.name);
         }
       }
       if (pasteParentId) setExpanded((s) => new Set(s).add(pasteParentId));
@@ -554,7 +636,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Paste failed");
     }
-  }, [clipboard, projectId, pushHistory, refresh, containerWrite, containerRemove]);
+  }, [clipboard, projectId, pushHistory, refresh, containerWrite, containerRemove, ensureFileModel]);
 
   const handleAction = useCallback((action: string, file: ProjectFile) => {
     const resolveParent = (f: ProjectFile) => {
@@ -740,6 +822,16 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
               {saving ? "Saving..." : isActiveDirty ? "● Unsaved" : "Saved"}
             </span>
             <button
+              onClick={handleSaveAll}
+              disabled={Object.keys(editedContents).length === 0 || saving}
+              className="rounded border px-3 py-1 text-xs hover:bg-accent disabled:opacity-50"
+              title="Save all dirty files"
+            >
+              Save All
+              {Object.keys(editedContents).length > 1 &&
+                ` (${Object.keys(editedContents).length})`}
+            </button>
+            <button
               onClick={handleSave}
               disabled={!isActiveDirty || saving}
               className="rounded bg-primary px-3 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
@@ -764,14 +856,43 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
           )}
         </div>
         {showProblems && (
-          <div className="h-44 shrink-0 border-t bg-background">
-            <ProblemsPanel
-              onSelectProblem={handleSelectProblem}
-              refreshToken={openFiles.length}
-              onCountChange={(errors, warnings) =>
-                setProblemCounts({ errors, warnings })
-              }
+          <div
+            className="shrink-0 border-t bg-background"
+            style={{ height: problemsHeight }}
+          >
+            <div
+              onMouseDown={(e) => {
+                e.preventDefault();
+                setIsResizingProblems(true);
+                const startY = e.clientY;
+                const startHeight = problemsHeight;
+
+                const handleMouseMove = (moveEvent: MouseEvent) => {
+                  const diff = moveEvent.clientY - startY;
+                  setProblemsHeight(
+                    Math.min(Math.max(startHeight - diff, 100), 500),
+                  );
+                };
+                const handleMouseUp = () => {
+                  setIsResizingProblems(false);
+                  document.removeEventListener("mousemove", handleMouseMove);
+                  document.removeEventListener("mouseup", handleMouseUp);
+                };
+
+                document.addEventListener("mousemove", handleMouseMove);
+                document.addEventListener("mouseup", handleMouseUp);
+              }}
+              className={`h-1 w-full cursor-row-resize transition-colors hover:bg-primary/20 ${isResizingProblems ? "bg-primary/20" : ""}`}
             />
+            <div className="h-[calc(100%-4px)]">
+              <ProblemsPanel
+                onSelectProblem={handleSelectProblem}
+                refreshToken={openFiles.length}
+                onCountChange={(errors, warnings) =>
+                  setProblemCounts({ errors, warnings })
+                }
+              />
+            </div>
           </div>
         )}
       </main>

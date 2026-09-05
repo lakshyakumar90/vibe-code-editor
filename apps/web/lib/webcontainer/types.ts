@@ -2,6 +2,7 @@
 export interface ContainerDbFile {
   path: string;
   content: string | null;
+  isFolder: boolean;
 }
 
 export type RuntimeStatus =

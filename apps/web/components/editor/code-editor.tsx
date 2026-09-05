@@ -5,7 +5,7 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { useTheme } from "next-themes";
 import type { ProjectFile } from "@/types/file";
 import { getLanguage } from "@/lib/file-icons";
-import { ensureModel, initLanguage, setSharedEditor, setSharedMonaco } from "@/lib/language/model-manager";
+import { ensureModel, flushPendingLanguageSetup, initLanguage, setSharedEditor, setSharedMonaco } from "@/lib/language/model-manager";
 import { flushPendingDependencyTypes } from "@/lib/language/dependency-loader";
 
 interface CodeEditorProps {
@@ -56,6 +56,9 @@ export function CodeEditor({
     setSharedMonaco(monaco);
     setSharedEditor(editor);
     initLanguage(monaco, template);
+    // Project truth (tsconfig options + full model graph) overrides the
+    // template fallback above when the layout has requested it.
+    flushPendingLanguageSetup();
     flushPendingDependencyTypes();
     if (file) {
       activePathRef.current = file.path;

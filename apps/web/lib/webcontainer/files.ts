@@ -5,12 +5,15 @@ import type { ContainerDbFile } from "./types";
 /**
  * Step 1 — DB files -> WebContainer FileSystemTree.
  * Uses file.path directly (already posix "src/App.tsx" from seeding).
- * Folders and null contents are skipped; intermediates become directories.
+ * Folder rows are skipped (intermediate segments become directories
+ * automatically); only real files are mounted. Mounting a folder row as a
+ * file would shadow its children and break the app (ENOTDIR at runtime).
  */
 export function toFileSystemTree(files: ContainerDbFile[]): FileSystemTree {
   const tree: FileSystemTree = {};
 
   for (const file of files ?? []) {
+    if (file.isFolder) continue;
     const rel = normalizeDbPath(file.path);
     if (!rel) continue;
     const parts = rel.split("/").filter(Boolean);

@@ -7,6 +7,7 @@ import type {
   ContainerDbFile,
   RuntimeStatus,
 } from "@/lib/webcontainer/types";
+import { appendCleanedLog } from "@/lib/webcontainer/output";
 
 interface RuntimeContextValue {
   runtime: ProjectRuntime;
@@ -17,18 +18,15 @@ interface RuntimeContextValue {
   bootAndMount: (files: ContainerDbFile[]) => Promise<void>;
   install: () => Promise<void>;
   start: () => Promise<void>;
+  /** Clear failure state so the editor can retry the boot sequence. */
+  reset: () => void;
 }
 
 const RuntimeContext = React.createContext<RuntimeContextValue | null>(null);
 
-const LOG_LIMIT = 500;
-
 function appendLog(setLogs: React.Dispatch<React.SetStateAction<string[]>>) {
   return (chunk: string) => {
-    setLogs((prev) => {
-      const next = [...prev, chunk];
-      return next.length > LOG_LIMIT ? next.slice(next.length - LOG_LIMIT) : next;
-    });
+    setLogs((prev) => appendCleanedLog(prev, chunk));
   };
 }
 
@@ -111,6 +109,14 @@ export function RuntimeProvider({
     };
   }, [runtime]);
 
+  const reset = React.useCallback(() => {
+    bootedRef.current = false;
+    setError(null);
+    setPreviewUrl(null);
+    setLogs([]);
+    setStatus("idle");
+  }, []);
+
   const value = React.useMemo(
     () => ({
       runtime,
@@ -121,8 +127,9 @@ export function RuntimeProvider({
       bootAndMount,
       install,
       start,
+      reset,
     }),
-    [runtime, status, previewUrl, logs, error, bootAndMount, install, start],
+    [runtime, status, previewUrl, logs, error, bootAndMount, install, start, reset],
   );
 
   return (

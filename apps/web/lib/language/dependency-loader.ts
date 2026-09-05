@@ -5,37 +5,34 @@ import { workspaceToMonacoUri } from "@/lib/workspace/paths";
 import { getSharedMonaco } from "./model-manager";
 
 /**
- * Steps 8–9 — bridge installed node_modules declarations into Monaco.
+ * Phase 5 — bridge installed node_modules declarations into Monaco.
  *
- * After `npm install`, declaration files live in the WebContainer FS but
- * Monaco's TS worker can't see them. We read each package's `package.json`
- * (`types`/`typings` entry, `index.d.ts` fallback) and register the files
- * via `addExtraLib` at `file:///project/node_modules/...` paths so the
- * worker's Node-style resolution finds them natively.
+ * Roots come from the project's own package.json (dependencies +
+ * devDependencies), intersected with what actually exists in the
+ * WebContainer — no hardcoded package list. Each package's declaration
+ * entry is resolved via types → typings → exports map → main-adjacent
+ * .d.ts → index.d.ts, then registered with addExtraLib at
+ * file:///project/node_modules/... so the worker's native resolution
+ * finds them (relative cross-references between declaration files keep
+ * working because original paths are preserved — never flattened into
+ * a fake `declare module` string).
  *
- * Roots are per-template, plus one level of transitive dependencies
- * (e.g. `csstype` via `@types/react`, `mime` via `express`), capped so a
- * huge graph can't stall the UI. `skipLibCheck` (see ts-config) keeps any
- * remaining gaps from surfacing as errors.
+ * One transitive level, capped. Full recursive graphs are V2.
+ * `skipLibCheck` keeps any remaining gaps from surfacing as errors.
  */
 
-/** Root type packages per template. Null = deferred to a V2 language service. */
-function getRootTypePackages(template: string): string[] | null {
-  switch (template) {
-    case "REACT":
-    case "NEXTJS":
-      return ["react", "react-dom", "@types/react", "@types/react-dom"];
-    case "EXPRESS":
-      return ["express", "@types/express", "@types/node"];
-    case "HONO":
-      return ["hono", "@types/node"];
-    default:
-      return null;
-  }
+/** Templates with a V1 type strategy (Vue/Angular need Volar/ALS = V2). */
+function hasTypeStrategy(template: string): boolean {
+  return (
+    template === "REACT" ||
+    template === "NEXTJS" ||
+    template === "EXPRESS" ||
+    template === "HONO"
+  );
 }
 
 /** Max packages to probe per load (roots + one transitive level). */
-const MAX_PACKAGES = 15;
+const MAX_PACKAGES = 25;
 
 interface PendingLoad {
   runtime: ProjectRuntime;
@@ -71,6 +68,73 @@ function cleanEntry(entry: string): string {
   return entry.replace(/^\.\//, "");
 }
 
+/** Direct dependency names from a workspace package.json (deps + devDeps). */
+export function getPackageRoots(packageJsonContent: string): string[] {
+  try {
+    const parsed = JSON.parse(packageJsonContent) as {
+      dependencies?: Record<string, unknown>;
+      devDependencies?: Record<string, unknown>;
+    };
+    const names = new Set<string>();
+    for (const section of [parsed.dependencies, parsed.devDependencies]) {
+      if (section && typeof section === "object") {
+        for (const name of Object.keys(section)) names.add(name);
+      }
+    }
+    return Array.from(names);
+  } catch {
+    return [];
+  }
+}
+
+type ExportsField = string | { [key: string]: ExportsField } | string[] | null;
+
+/** Walk an `exports` map by condition priority, collecting .d.ts-ish targets. */
+function walkExportsConditions(field: ExportsField, out: string[]): void {
+  if (!field) return;
+  if (typeof field === "string") {
+    out.push(cleanEntry(field));
+    return;
+  }
+  if (Array.isArray(field)) {
+    for (const entry of field) walkExportsConditions(entry, out);
+    return;
+  }
+  if (typeof field === "object") {
+    // Subpath map (".", "./feature", …) — follow the root entry only.
+    if (typeof field["."] === "string" || typeof field["."] === "object") {
+      walkExportsConditions(
+        field["."] as ExportsField,
+        out,
+      );
+      return;
+    }
+    for (const condition of [
+      "types",
+      "typings",
+      "default",
+      "import",
+      "require",
+      "node",
+    ]) {
+      const value = field[condition] as ExportsField | undefined;
+      if (typeof value === "string") {
+        out.push(cleanEntry(value));
+      } else if (value && typeof value === "object" && !Array.isArray(value)) {
+        walkExportsConditions(value, out);
+      }
+    }
+  }
+}
+
+/** `dist/index.js` → `dist/index.d.ts` (main-adjacent declarations). */
+function mainToDts(main: string): string | null {
+  const clean = cleanEntry(main);
+  if (clean.endsWith(".d.ts")) return clean;
+  const replaced = clean.replace(/\.(m|c)?js$/, ".d.ts");
+  return replaced !== clean ? replaced : null;
+}
+
 interface ResolvedPackage {
   files: Array<{ monacoPath: string; content: string }>;
   /** Runtime dependency names (for one-level transitive follow). */
@@ -89,11 +153,19 @@ async function resolveDeclarationFiles(
   );
   if (!metaRaw) return none;
 
-  let meta: { types?: unknown; typings?: unknown; dependencies?: unknown };
+  let meta: {
+    types?: unknown;
+    typings?: unknown;
+    exports?: unknown;
+    main?: unknown;
+    dependencies?: unknown;
+  };
   try {
     meta = JSON.parse(metaRaw) as {
       types?: unknown;
       typings?: unknown;
+      exports?: unknown;
+      main?: unknown;
       dependencies?: unknown;
     };
   } catch {
@@ -110,10 +182,20 @@ async function resolveDeclarationFiles(
   if (typeof meta.typings === "string" && meta.typings !== meta.types) {
     candidates.push(cleanEntry(meta.typings));
   }
+  if (meta.exports !== undefined && meta.exports !== null) {
+    walkExportsConditions(meta.exports as ExportsField, candidates);
+  }
+  if (typeof meta.main === "string") {
+    const adjacent = mainToDts(meta.main);
+    if (adjacent) candidates.push(adjacent);
+  }
   candidates.push("index.d.ts");
 
   const files: ResolvedPackage["files"] = [];
+  const seen = new Set<string>();
   for (const candidate of candidates) {
+    if (seen.has(candidate)) continue;
+    seen.add(candidate);
     const content = await readContainerText(
       runtime,
       `/node_modules/${pkg}/${candidate}`,
@@ -208,8 +290,16 @@ export async function ensureDependencyTypes(
 
   // Templates without a V1 type strategy (Vue/Angular language services
   // are a V2 milestone). Mark done to avoid FS probes.
-  const roots = getRootTypePackages(activeTemplate);
-  if (!roots) {
+  if (!hasTypeStrategy(activeTemplate)) {
+    loadedHash = hash;
+    pending = null;
+    return;
+  }
+
+  // Roots = the project's own direct dependencies (not a static list), so
+  // lucide-react / @radix-ui/* / zod load exactly like react does.
+  const roots = getPackageRoots(packageJsonContent);
+  if (roots.length === 0) {
     loadedHash = hash;
     pending = null;
     return;
