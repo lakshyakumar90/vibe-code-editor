@@ -26,6 +26,9 @@ importers:
       '@paralleldrive/cuid2':
         specifier: ^3.3.0
         version: 3.3.0
+      '@repo/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@repo/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -221,6 +224,12 @@ importers:
       eslint:
         specifier: ^9.39.1
         version: 9.39.1(jiti@2.7.0)
+      typescript:
+        specifier: 5.9.2
+        version: 5.9.2
+
+  packages/ai:
+    devDependencies:
       typescript:
         specifier: 5.9.2
         version: 5.9.2

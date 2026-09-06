@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@paralleldrive/cuid2": "^3.3.0",
+    "@repo/ai": "workspace:*",
     "@repo/auth": "workspace:*",
     "@repo/db": "workspace:*",
     "@repo/templates": "workspace:*",

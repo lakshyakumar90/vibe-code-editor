@@ -14,6 +14,12 @@ export {
   type PlanTask,
   type PlanTaskStatus,
 } from "./types.js";
+export { createProvider, SUPPORTED_PROVIDERS, type ProviderMeta } from "./factory.js";
+export { OpenAIProvider } from "./providers/openai.js";
+export { GroqProvider } from "./providers/groq.js";
+export { GeminiProvider } from "./providers/gemini.js";
+export { OllamaProvider } from "./providers/ollama.js";
+export { MockProvider } from "./providers/mock.js";
 export {
   AI_EVENT_TYPES,
   makeEvent,
