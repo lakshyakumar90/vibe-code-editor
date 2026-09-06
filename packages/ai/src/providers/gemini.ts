@@ -1,5 +1,5 @@
-import type { AiProvider, ChatRequest, InlineRequest } from "../types.js";
-import { sseDataLines } from "./stream.js";
+import type { AiProvider, ChatRequest, InlineRequest } from "../types";
+import { sseDataLines } from "./stream";
 
 /** Google Gemini via the Generative Language REST API (SSE streaming). */
 

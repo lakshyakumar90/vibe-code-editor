@@ -1,5 +1,5 @@
-import type { AiProvider, ChatRequest, InlineRequest } from "../types.js";
-import { sseDataLines, toOpenAIMessages } from "./stream.js";
+import type { AiProvider, ChatRequest, InlineRequest } from "../types";
+import { sseDataLines, toOpenAIMessages } from "./stream";
 
 /** Shared OpenAI-compatible chat-completions client (OpenAI + Groq). */
 

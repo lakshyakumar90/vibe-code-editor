@@ -33,6 +33,11 @@ export interface StatusEventData {
   message?: string;
 }
 
+export interface ChangeSetEventData {
+  changeSetId: string;
+  files: string[];
+}
+
 export interface DoneEventData {
   status: "completed" | "failed" | "stopped";
   changeSetId?: string;

@@ -1,5 +1,5 @@
-import type { AiProvider, ChatRequest, InlineRequest } from "../types.js";
-import { ndjsonLines } from "./stream.js";
+import type { AiProvider, ChatRequest, InlineRequest } from "../types";
+import { ndjsonLines } from "./stream";
 
 /** Local Ollama (NDJSON streaming via /api/chat). */
 

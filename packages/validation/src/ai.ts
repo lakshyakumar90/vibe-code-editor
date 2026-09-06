@@ -54,6 +54,11 @@ export const aiCompleteSchema = z.object({
   temperature: z.number().min(0).max(2).optional(),
 });
 
+/** Shape returned by POST /api/ai/complete. */
+export const inlineCompletionResultSchema = z.object({
+  completion: z.string().max(20000),
+});
+
 export type AiGenerateInput = z.infer<typeof aiGenerateSchema>;
 export type AiCompleteInput = z.infer<typeof aiCompleteSchema>;
 export type AttachmentInput = z.infer<typeof attachmentSchema>;

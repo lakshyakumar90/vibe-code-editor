@@ -16,8 +16,8 @@ import {
   ThumbsUp,
   X,
 } from "lucide-react";
-import type { PlanTask } from "@repo/ai";
-import { MockTransport } from "@/lib/ai/mock";
+import type { Attachment, PlanTask } from "@repo/ai";
+import { SseTransport } from "@/lib/ai/sse";
 import type {
   AiPanelMode,
   AttachableFile,
@@ -64,7 +64,18 @@ function PlanChecklist({ plan }: { plan: PlanTask[] }) {
   );
 }
 
-export function AIPanel({ attachables }: { attachables: AttachableFile[] }) {
+export function AIPanel({
+  projectId,
+  attachables,
+  externalAttachments,
+  onExternalConsumed,
+}: {
+  projectId: string;
+  attachables: AttachableFile[];
+  /** Ask-AI selections arriving from the editor (consumed into chips). */
+  externalAttachments: Attachment[];
+  onExternalConsumed: () => void;
+}) {
   const [mode, setMode] = useState<AiPanelMode>("ask");
   const [messages, setMessages] = useState<PanelMessage[]>([]);
   const [input, setInput] = useState("");
@@ -72,7 +83,26 @@ export function AIPanel({ attachables }: { attachables: AttachableFile[] }) {
   const [status, setStatus] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
-  const transportRef = useRef<MockTransport | null>(null);
+  const transportRef = useRef<SseTransport | null>(null);
+
+  // Merge Ask-AI selections from the editor into chips (deduped).
+  useEffect(() => {
+    if (externalAttachments.length === 0) return;
+    setChips((prev) => {
+      const known = new Set(
+        prev.map((c) => `${c.filePath}:${c.startLine}-${c.endLine}`),
+      );
+      const fresh = externalAttachments.filter(
+        (a) => !known.has(`${a.filePath}:${a.startLine}-${a.endLine}`),
+      );
+      if (fresh.length === 0) return prev;
+      return [
+        ...prev,
+        ...fresh.map((a) => ({ ...a, id: nextId("chip") })),
+      ];
+    });
+    onExternalConsumed();
+  }, [externalAttachments, onExternalConsumed]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const streamingIdRef = useRef<string | null>(null);
 
@@ -156,7 +186,7 @@ export function AIPanel({ attachables }: { attachables: AttachableFile[] }) {
     const history = [...messages, userMsg]
       .filter((m) => !m.streaming)
       .map((m) => ({ role: m.role, content: m.content }));
-    const transport = new MockTransport();
+    const transport = new SseTransport();
     transportRef.current = transport;
     streamingIdRef.current = assistantId;
 
@@ -168,6 +198,7 @@ export function AIPanel({ attachables }: { attachables: AttachableFile[] }) {
 
     transport.send(
       {
+        projectId,
         mode,
         prompt,
         attachments: chips.map(({ filePath, startLine, endLine, code }) => ({
@@ -213,7 +244,7 @@ export function AIPanel({ attachables }: { attachables: AttachableFile[] }) {
         },
       },
     );
-  }, [input, streaming, messages, mode, chips]);
+  }, [input, streaming, messages, mode, chips, projectId]);
 
   return (
     <div className="flex h-full flex-col bg-background">

@@ -41,6 +41,7 @@ export interface TransportEvents {
 }
 
 export interface SendOptions {
+  projectId: string;
   mode: AiPanelMode;
   prompt: string;
   attachments: Attachment[];

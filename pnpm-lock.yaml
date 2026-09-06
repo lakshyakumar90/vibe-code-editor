@@ -38,6 +38,9 @@ importers:
       '@repo/templates':
         specifier: workspace:*
         version: link:../../packages/templates
+      '@repo/validation':
+        specifier: workspace:*
+        version: link:../../packages/validation
       better-auth:
         specifier: ^1.6.24
         version: 1.6.24(@prisma/client@7.9.0(prisma@7.9.0(@types/react-dom@19.2.2(@types/react@19.2.2))(@types/react@19.2.2)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@7.0.2))(typescript@7.0.2))(mysql2@3.15.3)(next@16.2.0(react-dom@19.2.0(react@19.2.0))(react@19.2.0))(pg@8.22.0)(prisma@7.9.0(@types/react-dom@19.2.2(@types/react@19.2.2))(@types/react@19.2.2)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)(typescript@7.0.2))(react-dom@19.2.0(react@19.2.0))(react@19.2.0)

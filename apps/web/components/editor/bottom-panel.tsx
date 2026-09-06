@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Bot,
   ChevronDown,
@@ -14,6 +14,7 @@ import { TerminalInstance } from "./terminal-panel";
 import { AIPanel } from "./ai-panel";
 import { BOOT_TERMINAL_ID, useRuntime } from "./runtime-provider";
 import type { AttachableFile } from "@/lib/ai/types";
+import type { Attachment } from "@repo/ai";
 
 const AI_TAB_ID = "ai";
 
@@ -41,7 +42,21 @@ let termCounter = 1;
  * The pinned AI tab hosts the assistant panel (Ask/Plan/Agent). It stays
  * mounted while hidden so chat state survives tab switches.
  */
-export function BottomPanel({ attachables }: { attachables: AttachableFile[] }) {
+export function BottomPanel({
+  projectId,
+  attachables,
+  aiAttachments,
+  onAiAttachmentsConsumed,
+  aiRevealToken,
+}: {
+  projectId: string;
+  attachables: AttachableFile[];
+  /** Ask-AI selections from the editor (consumed into chips). */
+  aiAttachments: Attachment[];
+  onAiAttachmentsConsumed: () => void;
+  /** Bumped to focus the AI tab (e.g. after Ask-AI). */
+  aiRevealToken: number;
+}) {
   const { logs, status } = useRuntime();
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme === "dark";
@@ -88,6 +103,16 @@ export function BottomPanel({ attachables }: { attachables: AttachableFile[] }) 
       setCollapsed(false);
     }
   }, [status]);
+
+  // Ask-AI from the editor focuses the AI tab (skips the initial 0).
+  const revealSeenRef = useRef(aiRevealToken);
+  useEffect(() => {
+    if (aiRevealToken !== revealSeenRef.current) {
+      revealSeenRef.current = aiRevealToken;
+      setActive(AI_TAB_ID);
+      setCollapsed(false);
+    }
+  }, [aiRevealToken]);
 
   const running = status === "ready";
   const busy =
@@ -187,7 +212,12 @@ export function BottomPanel({ attachables }: { attachables: AttachableFile[] }) 
         <div style={{ height: PANEL_HEIGHT }} className={surface}>
           {/* AI panel: stays mounted (hidden when inactive) so chat survives */}
           <div className={`h-full w-full ${active === AI_TAB_ID ? "" : "hidden"}`}>
-            <AIPanel attachables={attachables} />
+            <AIPanel
+              projectId={projectId}
+              attachables={attachables}
+              externalAttachments={aiAttachments}
+              onExternalConsumed={onAiAttachmentsConsumed}
+            />
           </div>
           {terminals.length === 0 && active !== AI_TAB_ID && (
             <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">

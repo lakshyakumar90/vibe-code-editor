@@ -25,6 +25,8 @@ import {
   AlertDialogAction,
 } from "@repo/ui/components/ui/alert-dialog";
 import { X, Circle, Search, ChevronRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import type { Attachment } from "@repo/ai";
+import type { AskAISelection } from "./code-editor";
 
 interface EditorLayoutProps {
   projectId: string;
@@ -219,6 +221,36 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     if (target && !target.isFolder) {
       workspaceRef.current?.updateFile(target.path, newValue);
     }
+  }, []);
+
+  // Ask-AI selections captured from the editor (right-click menu).
+  // Passed down as attachment chips; the reveal token focuses the AI tab.
+  const [aiAttachments, setAiAttachments] = useState<Attachment[]>([]);
+  const [aiRevealToken, setAiRevealToken] = useState(0);
+
+  const handleAskAI = useCallback((selection: AskAISelection) => {
+    if (!selection.code.trim()) {
+      toast.info("Select some code first");
+      return;
+    }
+    setAiAttachments((prev) => {
+      if (
+        prev.some(
+          (a) =>
+            a.filePath === selection.filePath &&
+            a.startLine === selection.startLine &&
+            a.endLine === selection.endLine,
+        )
+      ) {
+        return prev;
+      }
+      return [...prev.slice(-9), { ...selection }];
+    });
+    setAiRevealToken((t) => t + 1);
+  }, []);
+
+  const handleAiAttachmentsConsumed = useCallback(() => {
+    setAiAttachments([]);
   }, []);
 
   /** Reinstall + restart when package.json content actually changed. */
@@ -821,12 +853,14 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
               onChange={(v) => handleContentChange(activeFile.id, v)}
               onSave={handleSave}
               saving={saving}
+              onAskAI={handleAskAI}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a file to begin editing.</div>
           )}
         </div>
         <BottomPanel
+          projectId={projectId}
           attachables={openFiles
             .filter((f) => !f.isFolder)
             .map((f) => ({
@@ -834,6 +868,9 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
               path: f.path,
               content: editedContents[f.id] ?? f.content ?? "",
             }))}
+          aiAttachments={aiAttachments}
+          onAiAttachmentsConsumed={handleAiAttachmentsConsumed}
+          aiRevealToken={aiRevealToken}
         />
       </main>
 

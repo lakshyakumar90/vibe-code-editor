@@ -13,6 +13,13 @@ import {
   setSharedMonaco,
 } from "@/lib/language/model-manager";
 
+export interface AskAISelection {
+  filePath: string;
+  startLine: number;
+  endLine: number;
+  code: string;
+}
+
 interface CodeEditorProps {
   projectId: string;
   file: ProjectFile | null;
@@ -20,6 +27,8 @@ interface CodeEditorProps {
   onChange: (value: string) => void;
   onSave: () => Promise<void>;
   saving: boolean;
+  /** Ask-AI selection action (right-click menu when text is selected). */
+  onAskAI?: (selection: AskAISelection) => void;
 }
 
 export function CodeEditor({
@@ -29,9 +38,12 @@ export function CodeEditor({
   onChange,
   onSave,
   saving: _saving,
+  onAskAI,
 }: CodeEditorProps) {
   void _projectId;
   void _saving;
+  const onAskAIRef = useRef(onAskAI);
+  onAskAIRef.current = onAskAI;
 
   const editorRef =
     useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
@@ -67,6 +79,28 @@ export function CodeEditor({
     }
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void onSaveRef.current();
+    });
+    // Ask-AI selection entry (right-click menu, only with a selection).
+    editor.addAction({
+      id: "ask-ai",
+      label: "Ask AI",
+      contextMenuGroupId: "navigation",
+      contextMenuOrder: 1.5,
+      precondition: "editorHasSelection",
+      run: (ed) => {
+        const cb = onAskAIRef.current;
+        const model = ed.getModel();
+        const selection = ed.getSelection();
+        if (!cb || !model || !selection || selection.isEmpty()) return;
+        const path = activePathRef.current;
+        if (!path) return;
+        cb({
+          filePath: path,
+          startLine: selection.startLineNumber,
+          endLine: selection.endLineNumber,
+          code: model.getValueInRange(selection),
+        });
+      },
     });
     editor.focus();
   };

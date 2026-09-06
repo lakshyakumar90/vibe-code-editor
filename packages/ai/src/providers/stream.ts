@@ -1,4 +1,4 @@
-import type { ChatMessage } from "../types.js";
+import type { ChatMessage } from "../types";
 
 /**
  * Shared streaming helpers. All byte handling here so providers stay thin.

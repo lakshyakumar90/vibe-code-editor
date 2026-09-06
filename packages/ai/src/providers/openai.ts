@@ -1,4 +1,4 @@
-import { OpenAICompatProvider, type OpenAICompatConfig } from "./openai-compat.js";
+import { OpenAICompatProvider, type OpenAICompatConfig } from "./openai-compat";
 
 export class OpenAIProvider extends OpenAICompatProvider {
   readonly id = "openai" as const;

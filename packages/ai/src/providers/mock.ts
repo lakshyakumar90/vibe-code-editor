@@ -1,5 +1,5 @@
-import type { AiProvider, ChatRequest, InlineRequest } from "../types.js";
-import { sleep } from "./stream.js";
+import type { AiProvider, ChatRequest, InlineRequest } from "../types";
+import { sleep } from "./stream";
 
 /** Deterministic mock for dev/test without keys or Ollama. Always configured. */
 

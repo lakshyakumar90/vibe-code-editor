@@ -13,13 +13,35 @@ export {
   type InlineRequest,
   type PlanTask,
   type PlanTaskStatus,
-} from "./types.js";
-export { createProvider, SUPPORTED_PROVIDERS, type ProviderMeta } from "./factory.js";
-export { OpenAIProvider } from "./providers/openai.js";
-export { GroqProvider } from "./providers/groq.js";
-export { GeminiProvider } from "./providers/gemini.js";
-export { OllamaProvider } from "./providers/ollama.js";
-export { MockProvider } from "./providers/mock.js";
+} from "./types";
+export { createProvider, SUPPORTED_PROVIDERS, type ProviderMeta } from "./factory";
+export { AIOrchestrator } from "./orchestrator";
+export type {
+  GenerateInput,
+  OrchestratorDeps,
+  OrchestratorOptions,
+  RequestContext,
+  RunStore,
+  WorkspaceReader,
+} from "./orchestrator";
+export {
+  MAX_CHANGESET_FILES,
+  MAX_FILE_BYTES,
+  computeDiffs,
+  extractChangeSet,
+  extractFencedJson,
+  extractPlan,
+  validateChangeSet,
+  type ExistingState,
+  type FileDiff,
+  type ValidationError,
+  type ValidationResult,
+} from "./changeset";
+export { OpenAIProvider } from "./providers/openai";
+export { GroqProvider } from "./providers/groq";
+export { GeminiProvider } from "./providers/gemini";
+export { OllamaProvider } from "./providers/ollama";
+export { MockProvider } from "./providers/mock";
 export {
   AI_EVENT_TYPES,
   makeEvent,
@@ -28,8 +50,9 @@ export {
   serializeSSE,
   type AiEventType,
   type AiStreamEvent,
+  type ChangeSetEventData,
   type DoneEventData,
   type ErrorEventData,
   type StatusEventData,
   type TokenEventData,
-} from "./events.js";
+} from "./events";

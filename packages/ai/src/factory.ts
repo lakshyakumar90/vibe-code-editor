@@ -1,9 +1,9 @@
-import type { AiProvider, AiProviderId } from "./types.js";
-import { OpenAIProvider } from "./providers/openai.js";
-import { GroqProvider } from "./providers/groq.js";
-import { GeminiProvider } from "./providers/gemini.js";
-import { OllamaProvider } from "./providers/ollama.js";
-import { MockProvider } from "./providers/mock.js";
+import type { AiProvider, AiProviderId } from "./types";
+import { OpenAIProvider } from "./providers/openai";
+import { GroqProvider } from "./providers/groq";
+import { GeminiProvider } from "./providers/gemini";
+import { OllamaProvider } from "./providers/ollama";
+import { MockProvider } from "./providers/mock";
 
 export interface ProviderMeta {
   id: AiProviderId;

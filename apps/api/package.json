@@ -16,6 +16,7 @@
     "@repo/ai": "workspace:*",
     "@repo/auth": "workspace:*",
     "@repo/db": "workspace:*",
+    "@repo/validation": "workspace:*",
     "@repo/templates": "workspace:*",
     "better-auth": "^1.6.24",
     "compression": "^1.8.1",
