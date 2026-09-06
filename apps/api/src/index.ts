@@ -5,6 +5,7 @@ import { toNodeHandler } from "better-auth/node";
 import { auth } from "@repo/auth";
 import cors from "cors";
 import { projectRouter } from "./modules/projects/project.routes";
+import { aiRouter } from "./modules/ai/ai.routes";
 import { errorHandler } from "./middleware/error.middleware";
 const app = express();
 app.use(
@@ -30,6 +31,7 @@ app.get("/", (req, res) => {
 });
 
 app.use("/api/projects", projectRouter);
+app.use("/api/ai", aiRouter);
 
 app.use(errorHandler);
 

@@ -87,6 +87,11 @@ model Project {
   files   File[]
   messages Message[]
 
+  aiConversations AIConversation[]
+  aiPlans         AIPlan[]
+  aiRuns          AIRun[]
+  changeSets      ChangeSet[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -162,4 +167,98 @@ model Message {
   updatedAt DateTime @updatedAt
 
   @@index([projectId, createdAt])
+}
+
+model AIConversation {
+  id        String @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId    String
+  title     String?
+  mode      String @default("ask")
+
+  messages AIMessage[]
+  plans    AIPlan[]
+  runs     AIRun[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, userId])
+  @@index([projectId, updatedAt])
+}
+
+model AIMessage {
+  id             String @id @default(cuid())
+  conversationId String
+  conversation   AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  role           String
+  content        String @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([conversationId, createdAt])
+}
+
+model AIPlan {
+  id             String @id @default(cuid())
+  conversationId String
+  conversation   AIConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  projectId      String
+  project        Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId         String
+  status         String @default("pending")
+  steps          Json   @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, userId])
+  @@index([conversationId])
+}
+
+model AIRun {
+  id             String  @id @default(cuid())
+  conversationId String?
+  conversation   AIConversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  projectId      String
+  project        Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userId         String
+  mode           String
+  status         String @default("running")
+
+  changeSets ChangeSet[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, userId])
+  @@index([conversationId])
+}
+
+enum ChangeSetStatus {
+  pending
+  applied
+  rejected
+}
+
+model ChangeSet {
+  id        String @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runId     String?
+  run       AIRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+  userId    String
+  status    ChangeSetStatus @default(pending)
+  changes   Json
+
+  resolvedAt DateTime?
+  resolvedBy String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([projectId, status])
+  @@index([runId])
 }
