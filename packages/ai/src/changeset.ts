@@ -75,6 +75,16 @@ export function validateChangeSet(
 
   const normalized: FileChange[] = [];
   const seen = new Set<string>();
+  // Folders created by this changeset satisfy parent checks regardless
+  // of entry order (pre-scan; each folder entry is still validated below).
+  const createdFolders = new Set<string>();
+  for (const raw of changes) {
+    const entry = raw as Partial<FileChange> | null;
+    const path = normalizePath(entry?.path);
+    if (path && entry?.isFolder === true && entry?.delete !== true) {
+      createdFolders.add(path);
+    }
+  }
 
   changes.forEach((raw, i) => {
     const at = `changes[${i}]`;
@@ -95,16 +105,61 @@ export function validateChangeSet(
 
     const del = entry?.delete === true;
     const content = entry?.content ?? null;
+    const isFolder = entry?.isFolder === true;
+    const existsAsFile = state.existingPaths.has(path);
+    const existsAsFolder = state.existingFolders.has(path);
+
+    if (isFolder && content !== null) {
+      errors.push({
+        path: `${at}.content`,
+        message: "folder changes must have null content",
+      });
+      return;
+    }
 
     if (del) {
-      if (!state.existingPaths.has(path)) {
+      if (!existsAsFile && !existsAsFolder) {
         errors.push({
           path: `${at}.path`,
-          message: `cannot delete "${path}": file does not exist`,
+          message: `cannot delete "${path}": nothing exists there`,
         });
         return;
       }
-      normalized.push({ path, content: null, delete: true });
+      if (existsAsFile && existsAsFolder) {
+        errors.push({
+          path: `${at}.path`,
+          message: `cannot delete "${path}": ambiguous (set isFolder to choose)`,
+        });
+        return;
+      }
+      // Deleting a folder removes it with all descendants.
+      normalized.push({ path, content: null, delete: true, ...(existsAsFolder ? { isFolder: true as const } : {}) });
+      return;
+    }
+
+    if (isFolder) {
+      if (existsAsFile) {
+        errors.push({
+          path: `${at}.path`,
+          message: `cannot create folder "${path}": a file exists there`,
+        });
+        return;
+      }
+      if (existsAsFolder) {
+        // Idempotent no-op (still recorded so apply can skip safely).
+        normalized.push({ path, content: null, isFolder: true });
+        return;
+      }
+      const parent = parentDir(path);
+      if (parent !== "" && !state.existingFolders.has(parent) && !createdFolders.has(parent)) {
+        errors.push({
+          path: `${at}.path`,
+          message: `parent folder "${parent}" does not exist (create it in the same changeset first)`,
+        });
+        return;
+      }
+      createdFolders.add(path);
+      normalized.push({ path, content: null, isFolder: true });
       return;
     }
 
@@ -122,12 +177,20 @@ export function validateChangeSet(
       });
       return;
     }
-    // v1: new files only under existing folders (folder creation deferred).
-    const parent = parentDir(path);
-    if (parent !== "" && !state.existingFolders.has(parent)) {
+    if (existsAsFolder) {
       errors.push({
         path: `${at}.path`,
-        message: `parent folder "${parent}" does not exist (new folders are not created in v1)`,
+        message: `cannot write file "${path}": a folder exists there`,
+      });
+      return;
+    }
+    // New files may land under existing folders or folders created
+    // earlier in the same changeset (order-independent).
+    const parent = parentDir(path);
+    if (parent !== "" && !state.existingFolders.has(parent) && !createdFolders.has(parent)) {
+      errors.push({
+        path: `${at}.path`,
+        message: `parent folder "${parent}" does not exist (create it in the same changeset first)`,
       });
       return;
     }
@@ -143,21 +206,29 @@ export interface FileDiff {
   oldContent: string | null;
   newContent: string | null;
   deleted: boolean;
+  isFolder: boolean;
 }
 
 /** Per-file old/new pairs for the review UI (GET /changeset/:id). */
 export async function computeDiffs(
   changes: FileChange[],
   readFile: (path: string) => Promise<string | null>,
+  statFile?: (path: string) => Promise<{ exists: boolean; isFolder: boolean } | null>,
 ): Promise<FileDiff[]> {
   const out: FileDiff[] = [];
   for (const change of changes) {
     const oldContent = await readFile(change.path);
+    let isFolder = change.isFolder === true;
+    if (statFile) {
+      const stat = await statFile(change.path).catch(() => null);
+      if (stat) isFolder = stat.isFolder;
+    }
     out.push({
       path: change.path,
       oldContent,
       newContent: change.delete === true ? null : (change.content ?? ""),
       deleted: change.delete === true,
+      isFolder,
     });
   }
   return out;

@@ -47,9 +47,11 @@ export interface PlanTask {
 export interface FileChange {
   /** Workspace-relative posix path, e.g. `src/App.tsx`. */
   path: string;
-  /** Full new file content. `null` + `delete: true` removes the file. */
+  /** Full new file content. `null` + `delete: true` removes the file/folder. */
   content: string | null;
   delete?: boolean;
+  /** Set for folder create/delete (content must be null). */
+  isFolder?: boolean;
 }
 
 export interface ChangeSetInput {

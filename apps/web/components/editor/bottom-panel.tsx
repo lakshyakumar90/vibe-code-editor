@@ -48,6 +48,7 @@ export function BottomPanel({
   aiAttachments,
   onAiAttachmentsConsumed,
   aiRevealToken,
+  onChangeset,
 }: {
   projectId: string;
   attachables: AttachableFile[];
@@ -56,6 +57,8 @@ export function BottomPanel({
   onAiAttachmentsConsumed: () => void;
   /** Bumped to focus the AI tab (e.g. after Ask-AI). */
   aiRevealToken: number;
+  /** Agent-mode changeset ready → layout fetches diffs for review. */
+  onChangeset: (changeSetId: string) => void;
 }) {
   const { logs, status } = useRuntime();
   const { resolvedTheme } = useTheme();
@@ -217,6 +220,7 @@ export function BottomPanel({
               attachables={attachables}
               externalAttachments={aiAttachments}
               onExternalConsumed={onAiAttachmentsConsumed}
+              onChangeset={onChangeset}
             />
           </div>
           {terminals.length === 0 && active !== AI_TAB_ID && (

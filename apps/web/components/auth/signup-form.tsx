@@ -7,7 +7,7 @@ import { toast } from "sonner"
 import Link from "next/link"
 import * as z from "zod"
 
-import { signUpSchema } from "@repo/validation/src/auth"
+import { signUpSchema } from "@repo/validation"
 import { AuthClient } from "@/lib/auth-client"
 
 import { Button } from "@repo/ui/components/ui/button"

@@ -17,6 +17,8 @@ import {
   X,
 } from "lucide-react";
 import type { Attachment, PlanTask } from "@repo/ai";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { SseTransport } from "@/lib/ai/sse";
 import type {
   AiPanelMode,
@@ -28,13 +30,79 @@ import type {
 const MODE_META: Record<AiPanelMode, { label: string; hint: string }> = {
   ask: { label: "Ask", hint: "Read-only chat, no file access" },
   plan: { label: "Plan", hint: "Read-only plan as a checklist, no writes" },
-  agent: { label: "Agent", hint: "Full tool loop (Phase 3)" },
+  agent: { label: "Agent", hint: "Reads files, edits via reviewable changesets" },
 };
 
 let messageSeq = 0;
 function nextId(prefix: string): string {
   messageSeq += 1;
   return `${prefix}-${Date.now()}-${messageSeq}`;
+}
+
+/**
+ * Strip machine blocks (tool calls, raw changeset/plan JSON) from displayed
+ * prose. Plans render as checklists and changesets via the review strip —
+ * showing the raw fences would be noise (known v1 roughness, now filtered).
+ */
+function stripAgentBlocks(content: string): string {
+  return content
+    .replace(/```(?:tool|changeset|plan)\s*\n[\s\S]*?```/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function AssistantMarkdown({ content }: { content: string }) {
+  return (
+    <div className="break-words text-xs leading-relaxed">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+          ul: ({ children }) => (
+            <ul className="mb-2 list-disc space-y-0.5 pl-4 last:mb-0">{children}</ul>
+          ),
+          ol: ({ children }) => (
+            <ol className="mb-2 list-decimal space-y-0.5 pl-4 last:mb-0">{children}</ol>
+          ),
+          li: ({ children }) => <li className="marker:text-muted-foreground">{children}</li>,
+          code: ({ className, children }) => {
+            const block = className?.includes("language-") ?? false;
+            if (block) return <code className={className}>{children}</code>;
+            return (
+              <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">
+                {children}
+              </code>
+            );
+          },
+          pre: ({ children }) => (
+            <pre className="mb-2 overflow-x-auto rounded-md bg-muted/70 p-2 font-mono text-[11px] last:mb-0">
+              {children}
+            </pre>
+          ),
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="text-primary underline"
+            >
+              {children}
+            </a>
+          ),
+          h1: ({ children }) => <div className="mb-1 font-semibold text-sm">{children}</div>,
+          h2: ({ children }) => <div className="mb-1 font-semibold text-sm">{children}</div>,
+          h3: ({ children }) => <div className="mb-1 font-semibold text-[13px]">{children}</div>,
+          blockquote: ({ children }) => (
+            <blockquote className="mb-2 border-l-2 border-border pl-2 text-muted-foreground last:mb-0">
+              {children}
+            </blockquote>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
 }
 
 function PlanChecklist({ plan }: { plan: PlanTask[] }) {
@@ -69,12 +137,15 @@ export function AIPanel({
   attachables,
   externalAttachments,
   onExternalConsumed,
+  onChangeset,
 }: {
   projectId: string;
   attachables: AttachableFile[];
   /** Ask-AI selections arriving from the editor (consumed into chips). */
   externalAttachments: Attachment[];
   onExternalConsumed: () => void;
+  /** Agent-mode changeset ready → layout fetches diffs for review. */
+  onChangeset: (changeSetId: string) => void;
 }) {
   const [mode, setMode] = useState<AiPanelMode>("ask");
   const [messages, setMessages] = useState<PanelMessage[]>([]);
@@ -223,6 +294,10 @@ export function AIPanel({
             prev.map((m) => (m.id === assistantId ? { ...m, plan } : m)),
           );
         },
+        onChangeset: (changeSetId) => {
+          setStatus(`ChangeSet ${changeSetId.slice(0, 8)} ready for review`);
+          onChangeset(changeSetId);
+        },
         onDone: () => {
           setStreaming(false);
           streamingIdRef.current = null;
@@ -244,7 +319,7 @@ export function AIPanel({
         },
       },
     );
-  }, [input, streaming, messages, mode, chips, projectId]);
+  }, [input, streaming, messages, mode, chips, projectId, onChangeset]);
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -280,11 +355,15 @@ export function AIPanel({
                       {m.streaming ? " • streaming…" : ""}
                     </div>
                   )}
-                  {m.content && (
+                  {m.content && m.role === "user" && (
                     <div className="whitespace-pre-wrap break-words">
                       {m.content}
                     </div>
                   )}
+                  {m.role === "assistant" &&
+                    stripAgentBlocks(m.content) !== "" && (
+                      <AssistantMarkdown content={stripAgentBlocks(m.content)} />
+                    )}
                   {m.role === "assistant" && m.plan && (
                     <PlanChecklist plan={m.plan} />
                   )}

@@ -56,6 +56,11 @@ export async function readSSEStream(
         }
         break;
       }
+      case "changeset": {
+        const id = (parsed.data as { changeSetId?: unknown }).changeSetId;
+        if (typeof id === "string" && id.length > 0) events.onChangeset?.(id);
+        break;
+      }
       case "error": {
         const m = (parsed.data as { message?: unknown }).message;
         events.onError(typeof m === "string" ? m : "AI request failed");

@@ -24,9 +24,10 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from "@repo/ui/components/ui/alert-dialog";
-import { X, Circle, Search, ChevronRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { X, Circle, Search, ChevronRight, PanelLeftClose, PanelLeftOpen, Check, Sparkles } from "lucide-react";
 import type { Attachment } from "@repo/ai";
 import type { AskAISelection } from "./code-editor";
+import { applyChangeSet, fetchChangeSet, rejectChangeSet, type FileDiff } from "@/lib/ai/diff";
 
 interface EditorLayoutProps {
   projectId: string;
@@ -70,6 +71,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
   const [activeFileId, setActiveFileId] = useState<string | null>(null);
   const [editedContents, setEditedContents] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [inlineEnabled, setInlineEnabled] = useState(true);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [clipboard, setClipboard] = useState<{ op: "cut" | "copy"; file: ProjectFile } | null>(null);
   const [history, setHistory] = useState<ProjectFile[][]>([]);
@@ -252,6 +254,135 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
   const handleAiAttachmentsConsumed = useCallback(() => {
     setAiAttachments([]);
   }, []);
+
+  // Phase 4 — pending agent changeset under review. Files stay untouched
+  // (DB + container + models) until per-file Accept; Reject discards.
+  const [pendingReview, setPendingReview] = useState<{
+    changeSetId: string;
+    diffs: FileDiff[];
+  } | null>(null);
+  const [reviewBusy, setReviewBusy] = useState(false);
+
+  const handleChangesetReady = useCallback(async (changeSetId: string) => {
+    setReviewBusy(true);
+    try {
+      const { diffs } = await fetchChangeSet(changeSetId);
+      if (diffs.length === 0) {
+        toast.info("Changeset is empty");
+        return;
+      }
+      setPendingReview({ changeSetId, diffs });
+      toast.success(`Reviewing AI changeset (${diffs.length} files)`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load changeset");
+    } finally {
+      setReviewBusy(false);
+    }
+  }, []);
+
+  /** Mirror accepted files to the container, then re-sync from DB truth. */
+  const syncAppliedFiles = useCallback(
+    async (applied: string[], diffs: FileDiff[]) => {
+      const byPath = new Map(diffs.map((d) => [d.path, d]));
+      for (const path of applied) {
+        const diff = byPath.get(path);
+        if (!diff) continue;
+        if (diff.deleted || diff.newContent === null) {
+          await containerRemove(path);
+        } else {
+          await containerWrite(path, diff.newContent);
+        }
+      }
+      // DB is authoritative after apply — drop stale dirty state first.
+      const ids = new Set(
+        filesRef.current
+          .filter((f) => !f.isFolder && applied.includes(f.path))
+          .map((f) => f.id),
+      );
+      setEditedContents((prev) => {
+        const next = { ...prev };
+        ids.forEach((id) => {
+          delete next[id];
+        });
+        return next;
+      });
+      await refresh({ silent: true });
+    },
+    [containerWrite, containerRemove, refresh],
+  );
+
+  const handleAcceptFiles = useCallback(
+    async (paths?: string[]) => {
+      if (!pendingReview) return;
+      setReviewBusy(true);
+      try {
+        const res = await applyChangeSet(pendingReview.changeSetId, paths);
+        await syncAppliedFiles(res.files, pendingReview.diffs);
+        if (res.status === "applied") {
+          setPendingReview(null);
+          toast.success(
+            res.files.length === 1 ? "Applied 1 file" : `Applied ${res.files.length} files`,
+          );
+        } else {
+          const remaining = new Set(res.remaining);
+          setPendingReview((prev) =>
+            prev
+              ? { ...prev, diffs: prev.diffs.filter((d) => remaining.has(d.path)) }
+              : prev,
+          );
+          toast.success(`Applied ${res.files.length} files (${res.remaining.length} remaining)`);
+        }
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Failed to apply");
+      } finally {
+        setReviewBusy(false);
+      }
+    },
+    [pendingReview, syncAppliedFiles],
+  );
+
+  const handleRejectFiles = useCallback(
+    async (paths?: string[]) => {
+      if (!pendingReview) return;
+      setReviewBusy(true);
+      try {
+        const res = await rejectChangeSet(pendingReview.changeSetId, paths);
+        if (res.status === "rejected") {
+          setPendingReview(null);
+          toast.success("Changeset rejected");
+        } else {
+          const remaining = new Set(res.remaining ?? []);
+          setPendingReview((prev) =>
+            prev
+              ? { ...prev, diffs: prev.diffs.filter((d) => remaining.has(d.path)) }
+              : prev,
+          );
+          toast.success("Files rejected");
+        }
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Failed to reject");
+      } finally {
+        setReviewBusy(false);
+      }
+    },
+    [pendingReview],
+  );
+
+  const handleOpenReviewFile = useCallback(
+    (diff: FileDiff) => {
+      if (diff.isFolder) {
+        toast.info("Folders apply from here — Accept to create or remove");
+        return;
+      }
+      const target = filesRef.current.find((f) => !f.isFolder && f.path === diff.path);
+      if (!target) {
+        toast.info("Accept this file to create it");
+        return;
+      }
+      handleOpenFile(target);
+    },
+    [handleOpenFile],
+  );
 
   /** Reinstall + restart when package.json content actually changed. */
   const maybeReinstall = useCallback(async (file: ProjectFile, content: string) => {
@@ -823,6 +954,14 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
               ))}
             </nav>
             <div className="flex shrink-0 items-center gap-2">
+              <button
+                onClick={() => setInlineEnabled((v) => !v)}
+                className={`flex items-center gap-1 rounded border px-2 py-1 text-xs hover:bg-accent ${inlineEnabled ? "text-foreground" : "text-muted-foreground opacity-60"}`}
+                title={inlineEnabled ? "AI completions on (click to disable)" : "AI completions off (click to enable)"}
+              >
+                <Sparkles className="size-3.5" />
+                AI
+              </button>
               <span className={saving ? "text-muted-foreground" : isActiveDirty ? "text-yellow-600" : "text-muted-foreground"}>
                 {saving ? "Saving..." : isActiveDirty ? "● Unsaved" : "Saved"}
               </span>
@@ -844,6 +983,86 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
             </div>
           </div>
         )}
+        {/* Pending agent changeset under review (Phase 4). */}
+        {pendingReview && pendingReview.diffs.length > 0 && (
+          <div className="shrink-0 border-b bg-muted/30 px-4 py-1.5">
+            <div className="flex items-center justify-between gap-2 text-xs">
+              <span className="font-medium text-foreground">
+                AI changeset — {pendingReview.diffs.length} file
+                {pendingReview.diffs.length === 1 ? "" : "s"} pending
+              </span>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  onClick={() => handleAcceptFiles()}
+                  disabled={reviewBusy}
+                  className="rounded bg-primary px-2.5 py-1 text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                >
+                  Accept all
+                </button>
+                <button
+                  onClick={() => handleRejectFiles()}
+                  disabled={reviewBusy}
+                  className="rounded border px-2.5 py-1 hover:bg-accent disabled:opacity-50"
+                >
+                  Reject all
+                </button>
+              </div>
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {pendingReview.diffs.map((diff) => {
+                const isNew = diff.oldContent === null && !diff.deleted;
+                const badge = diff.deleted ? (
+                  <span className="rounded bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-500">
+                    Deleted
+                  </span>
+                ) : isNew ? (
+                  <span className="rounded bg-green-500/15 px-1.5 py-0.5 text-[10px] font-medium text-green-500">
+                    New
+                  </span>
+                ) : (
+                  <span className="rounded bg-yellow-500/15 px-1.5 py-0.5 text-[10px] font-medium text-yellow-600">
+                    Modified
+                  </span>
+                );
+                return (
+                  <span
+                    key={diff.path}
+                    className="flex max-w-full items-center gap-1.5 rounded-md border bg-background py-1 pl-2 pr-1 text-[11px]"
+                  >
+                    <button
+                      onClick={() => handleOpenReviewFile(diff)}
+                      className="flex min-w-0 items-center gap-1.5 hover:underline disabled:no-underline disabled:opacity-70"
+                      disabled={diff.isFolder}
+                      title={diff.isFolder ? `${diff.path} (folder)` : isNew ? diff.path : `Open ${diff.path} diff`}
+                    >
+                      {getFileIcon(diff.path.split("/").pop() ?? diff.path, diff.isFolder, false)}
+                      <span className="truncate">{diff.path}</span>
+                    </button>
+                    {badge}
+                    <button
+                      onClick={() => handleAcceptFiles([diff.path])}
+                      disabled={reviewBusy}
+                      className="rounded p-0.5 text-green-600 hover:bg-accent disabled:opacity-50"
+                      title={`Accept ${diff.path}`}
+                      aria-label={`Accept ${diff.path}`}
+                    >
+                      <Check className="size-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleRejectFiles([diff.path])}
+                      disabled={reviewBusy}
+                      className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-50"
+                      title={`Reject ${diff.path}`}
+                      aria-label={`Reject ${diff.path}`}
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           {activeFile ? (
             <CodeEditor
@@ -854,6 +1073,10 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
               onSave={handleSave}
               saving={saving}
               onAskAI={handleAskAI}
+              inlineEnabled={inlineEnabled}
+              reviewDiff={
+                pendingReview?.diffs.find((d) => d.path === activeFile.path) ?? null
+              }
             />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a file to begin editing.</div>
@@ -871,6 +1094,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
           aiAttachments={aiAttachments}
           onAiAttachmentsConsumed={handleAiAttachmentsConsumed}
           aiRevealToken={aiRevealToken}
+          onChangeset={handleChangesetReady}
         />
       </main>
 

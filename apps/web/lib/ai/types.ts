@@ -36,6 +36,8 @@ export interface TransportEvents {
   onToken(token: string): void;
   onStatus(text: string): void;
   onPlan(plan: PlanTask[]): void;
+  /** Agent-mode changeset ready for review (Phase 4). Optional. */
+  onChangeset?(changeSetId: string): void;
   onDone(): void;
   onError(message: string): void;
 }

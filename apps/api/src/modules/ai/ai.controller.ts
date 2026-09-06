@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { prisma, ProjectRole } from "@repo/db";
+import { prisma, Prisma, ProjectRole } from "@repo/db";
 import {
   AIOrchestrator,
   computeDiffs,
@@ -48,6 +48,45 @@ function validationError(res: Response, message: string, errors: Array<{ path: s
 /** Express 5 query/params values can be string|string[] — narrow to string. */
 function str(v: unknown): string | undefined {
   return typeof v === "string" ? v : undefined;
+}
+
+/** JSON-safe copy for Prisma Json columns (drops undefined optionals). */
+function toJson(v: unknown): Prisma.InputJsonValue {
+  return JSON.parse(JSON.stringify(v)) as Prisma.InputJsonValue;
+}
+
+/** A validated whole-file change (matches @repo/ai FileChange). */
+interface StoredChange {
+  path: string;
+  content: string | null;
+  delete?: boolean;
+  isFolder?: boolean;
+}
+
+function splitName(path: string): { dir: string; name: string } {
+  const slash = path.lastIndexOf("/");
+  return slash === -1
+    ? { dir: "", name: path }
+    : { dir: path.slice(0, slash), name: path.slice(slash + 1) };
+}
+
+/**
+ * Optional per-file selection for apply/reject (`{ paths?: string[] }`).
+ * `paths` undefined = whole-changeset operation. Phase 4 per-file UI.
+ */
+function parsePaths(
+  body: unknown,
+): { ok: true; paths?: string[] } | { ok: false } {
+  const paths = (body as { paths?: unknown } | null)?.paths;
+  if (paths === undefined) return { ok: true };
+  if (!Array.isArray(paths) || paths.length === 0 || paths.length > 20) {
+    return { ok: false };
+  }
+  const clean = paths.filter(
+    (p: unknown): p is string => typeof p === "string" && p.length > 0,
+  );
+  if (clean.length !== paths.length) return { ok: false };
+  return { ok: true, paths: [...new Set(clean)] };
 }
 
 async function checkUserProjectAccess(
@@ -457,12 +496,20 @@ export const aiController = {
       }
       const raw = cs.changes as { changes?: unknown } | unknown[];
       const changes = Array.isArray((raw as { changes?: unknown })?.changes)
-        ? ((raw as { changes: Array<{ path: string; content: string | null; delete?: boolean }> }).changes)
+        ? ((raw as { changes: Array<{ path: string; content: string | null; delete?: boolean; isFolder?: boolean }> }).changes)
         : [];
-      const diffs = await computeDiffs(changes, async (path) => {
-        const file = await fileRepository.getFileByPath(cs.projectId, path).catch(() => null);
-        return file && !file.isFolder ? file.content : null;
-      });
+      const diffs = await computeDiffs(
+        changes,
+        async (path: string) => {
+          const file = await fileRepository.getFileByPath(cs.projectId, path).catch(() => null);
+          return file && !file.isFolder ? file.content : null;
+        },
+        async (path: string) => {
+          const file = await fileRepository.getFileByPath(cs.projectId, path).catch(() => null);
+          if (!file) return null;
+          return { exists: true, isFolder: file.isFolder };
+        },
+      );
       return res.json({ success: true, data: { changeSet: cs, diffs } });
     } catch (e) {
       return res.status(500).json({
@@ -505,6 +552,14 @@ export const aiController = {
           message: "EDITOR role required to apply",
         });
       }
+      const parsedPaths = parsePaths(req.body);
+      if (!parsedPaths.ok) {
+        return res.status(400).json({
+          success: false,
+          code: "VALIDATION_ERROR",
+          message: "paths must be an array of 1–20 non-empty strings",
+        });
+      }
       const raw = cs.changes as { changes?: unknown };
       const existing = await fileRepository.getAllFiles(cs.projectId);
       const existingPaths = new Set(existing.filter((f) => !f.isFolder).map((f) => f.path));
@@ -514,57 +569,138 @@ export const aiController = {
         return res.status(400).json({
           success: false,
           code: "VALIDATION_FAILED",
-          message: vRes.errors.map((e) => `${e.path}: ${e.message}`).join("; "),
+          message: vRes.errors
+            .map((e: { path: string; message: string }) => `${e.path}: ${e.message}`)
+            .join("; "),
         });
       }
+      // Per-file apply: unknown requested paths are rejected up front.
+      const wanted = parsedPaths.paths;
+      if (wanted) {
+        const known = new Set(
+          vRes.normalized.changes.map((c: StoredChange) => c.path),
+        );
+        const unknown = wanted.filter((p) => !known.has(p));
+        if (unknown.length > 0) {
+          return res.status(400).json({
+            success: false,
+            code: "VALIDATION_FAILED",
+            message: `Unknown paths in changeset: ${unknown.join(", ")}`,
+          });
+        }
+      }
+      const targets = wanted
+        ? vRes.normalized.changes.filter((c: StoredChange) =>
+            wanted.includes(c.path),
+          )
+        : vRes.normalized.changes;
+      const parentIdFor = async (dir: string): Promise<string | null> => {
+        if (dir === "") return null;
+        const folder = await fileRepository.getFileByPath(cs.projectId, dir);
+        if (!folder || !folder.isFolder) {
+          throw new Error(`Parent folder "${dir}" no longer exists`);
+        }
+        return folder.id;
+      };
       const applied: string[] = [];
-      for (const change of vRes.normalized.changes) {
-        if (change.delete === true) {
+      // Deterministic order: folder creates → file writes → file deletes →
+      // folder deletes. Changes under an applied folder-delete are skipped
+      // (the whole subtree goes with the folder).
+      const rank = (c: StoredChange): number => {
+        if (c.isFolder === true && c.delete !== true) return 0;
+        if (c.delete !== true) return 1;
+        if (c.isFolder !== true) return 2;
+        return 3;
+      };
+      const ordered = [...targets].sort((a, b) => rank(a) - rank(b));
+      const deletedFolders: string[] = [];
+      try {
+        for (const change of ordered) {
+          if (deletedFolders.some((d) => change.path.startsWith(d + "/"))) {
+            continue;
+          }
+          if (change.delete === true) {
+            const target = await fileRepository.getFileByPath(cs.projectId, change.path);
+            if (target) {
+              await fileRepository.deleteFile(target.id, cs.projectId);
+              applied.push(change.path);
+              if (target.isFolder) deletedFolders.push(change.path);
+            }
+            continue;
+          }
+          if (change.isFolder === true) {
+            const existing = await fileRepository.getFileByPath(cs.projectId, change.path);
+            if (existing) {
+              if (!existing.isFolder) {
+                throw new Error(`Cannot create folder "${change.path}": a file exists there`);
+              }
+              applied.push(change.path);
+              continue;
+            }
+            const { dir, name } = splitName(change.path);
+            await fileRepository.createFile({
+              projectId: cs.projectId,
+              name,
+              content: null,
+              parentId: await parentIdFor(dir),
+              isFolder: true,
+              path: change.path,
+            });
+            applied.push(change.path);
+            continue;
+          }
           const target = await fileRepository.getFileByPath(cs.projectId, change.path);
           if (target) {
-            await fileRepository.deleteFile(target.id, cs.projectId);
+            if (target.isFolder) {
+              throw new Error(`Cannot write file "${change.path}": a folder exists there`);
+            }
+            await fileRepository.updateFileByPath(cs.projectId, change.path, {
+              content: change.content ?? "",
+            });
             applied.push(change.path);
+            continue;
           }
-          continue;
-        }
-        const target = await fileRepository.getFileByPath(cs.projectId, change.path);
-        if (target) {
-          await fileRepository.updateFileByPath(cs.projectId, change.path, {
+          const { dir, name } = splitName(change.path);
+          await fileRepository.createFile({
+            projectId: cs.projectId,
+            name,
             content: change.content ?? "",
+            parentId: await parentIdFor(dir),
+            isFolder: false,
+            path: change.path,
           });
           applied.push(change.path);
-          continue;
         }
-        const slash = change.path.lastIndexOf("/");
-        const dir = slash === -1 ? "" : change.path.slice(0, slash);
-        const name = slash === -1 ? change.path : change.path.slice(slash + 1);
-        let parentId: string | null = null;
-        if (dir !== "") {
-          const folder = await fileRepository.getFileByPath(cs.projectId, dir);
-          if (!folder || !folder.isFolder) {
-            return res.status(400).json({
-              success: false,
-              code: "VALIDATION_FAILED",
-              message: `Parent folder "${dir}" no longer exists`,
-            });
-          }
-          parentId = folder.id;
-        }
-        await fileRepository.createFile({
-          projectId: cs.projectId,
-          name,
-          content: change.content ?? "",
-          parentId,
-          isFolder: false,
-          path: change.path,
+      } catch (e) {
+        return res.status(400).json({
+          success: false,
+          code: "VALIDATION_FAILED",
+          message: e instanceof Error ? e.message : "Apply failed",
         });
-        applied.push(change.path);
       }
+      // Partial apply keeps the changeset pending with the remainder.
+      const appliedSet = new Set(applied);
+      const remaining = vRes.normalized.changes.filter(
+        (c: StoredChange) => !appliedSet.has(c.path),
+      );
+      const fullyApplied = remaining.length === 0;
       await prisma.changeSet.update({
         where: { id },
-        data: { status: "applied", resolvedAt: new Date(), resolvedBy: user.id },
+        data: {
+          status: fullyApplied ? "applied" : "pending",
+          changes: toJson({ changes: remaining }),
+          ...(fullyApplied ? { resolvedAt: new Date(), resolvedBy: user.id } : {}),
+        },
       });
-      return res.json({ success: true, data: { changeSetId: id, status: "applied", files: applied } });
+      return res.json({
+        success: true,
+        data: {
+          changeSetId: id,
+          status: fullyApplied ? "applied" : "pending",
+          files: applied,
+          remaining: remaining.map((c: StoredChange) => c.path),
+        },
+      });
     } catch (e) {
       return res.status(500).json({
         success: false,
@@ -598,11 +734,49 @@ export const aiController = {
       if (!(await checkUserProjectAccess(cs.projectId, user.id))) {
         return res.status(403).json({ success: false, code: "FORBIDDEN", message: "No access" });
       }
+      // Per-file reject drops just those paths; empty remainder = rejected.
+      const parsedPaths = parsePaths(req.body);
+      if (!parsedPaths.ok) {
+        return res.status(400).json({
+          success: false,
+          code: "VALIDATION_ERROR",
+          message: "paths must be an array of 1–20 non-empty strings",
+        });
+      }
+      if (!parsedPaths.paths) {
+        await prisma.changeSet.update({
+          where: { id },
+          data: { status: "rejected", resolvedAt: new Date(), resolvedBy: user.id },
+        });
+        return res.json({ success: true, data: { changeSetId: id, status: "rejected" } });
+      }
+      const raw = cs.changes as { changes?: unknown };
+      const stored = Array.isArray(raw?.changes)
+        ? (raw.changes as Array<{ path?: unknown }>)
+        : [];
+      const dropped = new Set(parsedPaths.paths);
+      const remaining = stored.filter(
+        (c) => typeof c?.path !== "string" || !dropped.has(c.path),
+      );
+      const fullyRejected = remaining.length === 0;
       await prisma.changeSet.update({
         where: { id },
-        data: { status: "rejected", resolvedAt: new Date(), resolvedBy: user.id },
+        data: {
+          status: fullyRejected ? "rejected" : "pending",
+          changes: toJson({ changes: remaining }),
+          ...(fullyRejected ? { resolvedAt: new Date(), resolvedBy: user.id } : {}),
+        },
       });
-      return res.json({ success: true, data: { changeSetId: id, status: "rejected" } });
+      return res.json({
+        success: true,
+        data: {
+          changeSetId: id,
+          status: fullyRejected ? "rejected" : "pending",
+          remaining: remaining
+            .map((c) => (typeof c?.path === "string" ? c.path : null))
+            .filter((p): p is string => p !== null),
+        },
+      });
     } catch (e) {
       return res.status(500).json({
         success: false,
