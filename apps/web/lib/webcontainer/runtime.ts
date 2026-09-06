@@ -62,6 +62,7 @@ async function pipeOutput(
 export class ProjectRuntime {
   private container: WebContainer | null = null;
   private serverReadyUnsub: (() => void) | null = null;
+  private portUnsub: (() => void) | null = null;
   private devProcess: WebContainerProcess | null = null;
   private devOutput: OutputHandler | undefined;
   readonly template: TemplateId;
@@ -111,6 +112,18 @@ export class ProjectRuntime {
     });
   }
 
+  /** Kill the running dev server (if any). Never throws. */
+  stopDevServer(): void {
+    if (this.devProcess) {
+      try {
+        this.devProcess.kill();
+      } catch {
+        // already exited
+      }
+      this.devProcess = null;
+    }
+  }
+
   /** Kill the running dev server (if any) and start a fresh one. */
   async restartDevServer(onOutput?: OutputHandler): Promise<void> {
     this.devOutput = onOutput ?? this.devOutput;
@@ -134,6 +147,9 @@ export class ProjectRuntime {
     const container = await this.boot();
     const proc = await container.spawn("jsh", [], {
       terminal: { cols, rows },
+      // Pin a clean prompt; the default renders the container id as cwd
+      // (`~/<id>`). Ignored if the shell doesn't honor PS1.
+      env: { PS1: "~/project ❯ " },
     });
     void pipeOutput(proc.output, onOutput);
 
@@ -189,6 +205,20 @@ export class ProjectRuntime {
     this.serverReadyUnsub = typeof off === "function" ? off : null;
   }
 
+  /**
+   * Port open/close events. Used to detect the dev server dying
+   * (Ctrl+C / terminal close) so the preview can show a stopped state.
+   */
+  onPort(cb: (port: number, type: "open" | "close", url: string) => void): void {
+    if (!this.container) return;
+    this.portUnsub?.();
+    const off = (this.container as WebContainer).on(
+      "port",
+      (port: number, type: "open" | "close", url: string) => cb(port, type, url),
+    );
+    this.portUnsub = typeof off === "function" ? off : null;
+  }
+
   expectedPort(): number {
     return TEMPLATE_RUNTIME[this.template].port;
   }
@@ -217,6 +247,8 @@ export class ProjectRuntime {
   teardown(): void {
     this.serverReadyUnsub?.();
     this.serverReadyUnsub = null;
+    this.portUnsub?.();
+    this.portUnsub = null;
     if (this.devProcess) {
       try {
         this.devProcess.kill();

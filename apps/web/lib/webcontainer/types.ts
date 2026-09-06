@@ -12,4 +12,5 @@ export type RuntimeStatus =
   | "installing"
   | "starting"
   | "ready"
+  | "stopped"
   | "error";

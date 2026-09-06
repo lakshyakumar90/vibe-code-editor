@@ -6,18 +6,12 @@ import { FileTree } from "./file-tree";
 import { CodeEditor } from "./code-editor";
 import { api } from "@/lib/api";
 import { getUniqueName, getPasteParentId, collectDescendants } from "@/lib/file-utils";
-import { getFileIcon, getLanguage } from "@/lib/file-icons";
+import { getFileIcon } from "@/lib/file-icons";
 import { createWorkspace, type VirtualWorkspace } from "@/lib/workspace/workspace";
 import { buildPathToId } from "@/lib/workspace/file-map";
 import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import { removeModelByPath } from "@/lib/language/model-manager";
-import { ensureModel, getSharedMonaco, requestLanguageSetup } from "@/lib/language/model-manager";
-import { loadProjectTsconfig } from "@/lib/language/tsconfig-loader";
-import { ensureDependencyTypes } from "@/lib/language/dependency-loader";
-import { setActiveTemplate } from "@/lib/language/dependency-loader";
-import { revealInEditor } from "@/lib/language/model-manager";
-import { ProblemsPanel } from "./problems-panel";
-import type { Problem } from "@/lib/language/diagnostics";
+import { BottomPanel } from "./bottom-panel";
 import { useRuntime } from "./runtime-provider";
 import { toast } from "sonner";
 import {
@@ -30,7 +24,7 @@ import {
   AlertDialogCancel,
   AlertDialogAction,
 } from "@repo/ui/components/ui/alert-dialog";
-import { X, Circle } from "lucide-react";
+import { X, Circle, Search, ChevronRight, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 
 interface EditorLayoutProps {
   projectId: string;
@@ -84,30 +78,22 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
   const [closeTarget, setCloseTarget] = useState<ProjectFile | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(288);
   const [isResizing, setIsResizing] = useState(false);
-  const [showProblems, setShowProblems] = useState(true);
-  const [problemCounts, setProblemCounts] = useState({ errors: 0, warnings: 0 });
-  const [problemsHeight, setProblemsHeight] = useState(176);
-  const [isResizingProblems, setIsResizingProblems] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [leftTab, setLeftTab] = useState<"files" | "search">("files");
+  const [searchQuery, setSearchQuery] = useState("");
   const filesRef = useRef(files);
   filesRef.current = files;
   const editedContentsRef = useRef(editedContents);
   editedContentsRef.current = editedContents;
 
   // --- WebContainer / workspace sync (Steps 0+1+6) ---
-  const { runtime, bootAndMount, install, start, status: runtimeStatus } = useRuntime();
+  const { runtime, bootAndMount, runBootChain, reinstallAndRestart, status: runtimeStatus } = useRuntime();
   const workspaceRef = useRef<VirtualWorkspace | null>(null);
   const pathToIdRef = useRef<Map<string, string>>(new Map());
   const bootedRef = useRef(false);
   const startedRef = useRef(false);
   const containerReadyRef = useRef(false);
   const depHashRef = useRef<string>("");
-  const writeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
-    };
-  }, []);
 
   /** Best-effort mirror into the container FS + workspace. Never throws. */
   const containerWrite = useCallback(
@@ -121,23 +107,6 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
       }
     },
     [runtime],
-  );
-
-  /**
-   * Keep the language graph complete on structural ops: materialize a
-   * model for newly created paths (no-op when the editor never mounted).
-   */
-  const ensureFileModel = useCallback(
-    (path: string, content: string, name: string) => {
-      const monaco = getSharedMonaco();
-      if (!monaco) return;
-      try {
-        ensureModel(monaco, path, content, getLanguage(name));
-      } catch {
-        // Best effort — opening the file later self-heals.
-      }
-    },
-    [],
   );
 
   const containerRemove = useCallback(
@@ -190,8 +159,9 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
-  // Boot the runtime once files arrive: workspace -> language setup
-  // (project tsconfig + full model preload) -> mount -> install -> dev.
+  // Boot the runtime once files arrive: workspace -> mount, then
+  // `npm install && npm run dev` runs in the boot terminal's foreground
+  // shell (Ctrl+C / closing it stops the dev server + preview).
   // Structural edits later only mirror (no reinstall/remount).
   // Re-runs after a provider reset() (status back to idle) for manual retry.
   useEffect(() => {
@@ -201,33 +171,14 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     const snapshot = [...files];
     workspaceRef.current = createWorkspace(snapshot);
     pathToIdRef.current = buildPathToId(snapshot);
-    setActiveTemplate(template);
-    // Phase 1 + Phase 2: project tsconfig becomes the worker config and
-    // every source file becomes a model — deferred until Monaco mounts.
-    // Supplier re-reads live state so content is never stale.
-    const tsconfig = loadProjectTsconfig(workspaceRef.current);
-    requestLanguageSetup(tsconfig.compilerOptions, template, () =>
-      filesRef.current
-        .filter((f) => !f.isFolder)
-        .map((f) => ({
-          path: f.path,
-          content:
-            editedContentsRef.current[f.id] ?? f.content ?? "",
-          language: getLanguage(f.name),
-        })),
-    );
     void (async () => {
       try {
         await bootAndMount(snapshot.map((f) => ({ path: f.path, content: f.content, isFolder: f.isFolder })));
         containerReadyRef.current = true;
-        await install();
         const packageJson =
           workspaceRef.current?.getFile("package.json") ?? "";
         depHashRef.current = hashPackageJson(packageJson);
-        // Types need both install output (node_modules) and a mounted
-        // Monaco instance; the loader defers itself if editor isn't up yet.
-        void ensureDependencyTypes(runtime, packageJson);
-        await start();
+        await runBootChain();
         startedRef.current = true;
       } catch {
         // status/error surface in PreviewPanel via the provider
@@ -235,7 +186,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
         containerReadyRef.current = false;
       }
     })();
-  }, [files, bootAndMount, install, start, runtime, template, runtimeStatus]);
+  }, [files, bootAndMount, runBootChain, runtime, template, runtimeStatus]);
 
   const toggle = useCallback((id: string) => {
     setExpanded((prev) => {
@@ -259,41 +210,16 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     setActiveFileId(fileId);
   }, []);
 
-  const handleSelectProblem = useCallback((problem: Problem) => {
-    const target = filesRef.current.find(
-      (f) => !f.isFolder && f.path === problem.dbPath,
-    );
-    if (!target) {
-      toast.error(`File not found: ${problem.dbPath}`);
-      return;
-    }
-    setOpenFiles((prev) =>
-      prev.some((f) => f.id === target.id) ? prev : [...prev, target],
-    );
-    setActiveFileId(target.id);
-    // Let the editor swap to the file's model, then jump to the marker.
-    const { line, column, dbPath } = problem;
-    setTimeout(() => revealInEditor(dbPath, line, column), 100);
-    setTimeout(() => revealInEditor(dbPath, line, column), 400);
-  }, []);
-
   const handleContentChange = useCallback((fileId: string, newValue: string) => {
     setEditedContents((prev) => ({ ...prev, [fileId]: newValue }));
-    // Immediate: workspace (TS worker reads the Monaco model directly).
-    // Debounced ~400ms: container FS -> Vite HMR. DB persist stays manual (Save).
+    // Typing only marks the file dirty (in-memory workspace mirrors it so
+    // the editor stays coherent). The container FS — and therefore Vite
+    // HMR — updates on Save only, never while typing.
     const target = filesRef.current.find((f) => f.id === fileId);
     if (target && !target.isFolder) {
       workspaceRef.current?.updateFile(target.path, newValue);
-      if (writeTimerRef.current) clearTimeout(writeTimerRef.current);
-      const path = target.path;
-      writeTimerRef.current = setTimeout(() => {
-        if (!containerReadyRef.current) return;
-        runtime.writeFile(path, newValue).catch(() => {
-          toast.error("Sync to runtime failed");
-        });
-      }, 400);
     }
-  }, [runtime]);
+  }, []);
 
   /** Reinstall + restart when package.json content actually changed. */
   const maybeReinstall = useCallback(async (file: ProjectFile, content: string) => {
@@ -303,9 +229,9 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
       depHashRef.current = newHash;
       toast.info("Dependencies changed — reinstalling…");
       try {
-        await install();
-        await runtime.restartDevServer();
-        void ensureDependencyTypes(runtime, content);
+        // Runs in the boot terminal (Ctrl+C, reinstall, restart dev);
+        // falls back to detached processes when no boot shell exists.
+        await reinstallAndRestart();
         toast.success("Dependencies updated");
       } catch {
         toast.error("Reinstall failed");
@@ -313,7 +239,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     } else {
       depHashRef.current = newHash;
     }
-  }, [install, runtime]);
+  }, [reinstallAndRestart]);
 
   const handleSave = useCallback(async () => {
     if (!activeFile) return;
@@ -348,36 +274,24 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     }
   }, [activeFile, editedContents, projectId, refresh, containerWrite, maybeReinstall]);
 
-  /** Persist every dirty open file (PUT per file, one refresh at the end). */
-  const handleSaveAll = useCallback(async () => {
-    const entries = Object.entries(editedContentsRef.current);
-    if (entries.length === 0) {
-      toast.info("No changes to save");
-      return;
-    }
-    try {
-      setSaving(true);
-      let saved = 0;
-      for (const [fileId, content] of entries) {
-        const file = filesRef.current.find((f) => f.id === fileId);
-        if (!file || file.isFolder || content === (file.content ?? "")) continue;
-        await api.put(`/api/projects/${projectId}/files/${fileId}`, { content });
-        const updated = { ...file, content } as ProjectFile;
-        setFiles((prev) => prev.map((f) => (f.id === fileId ? updated : f)));
-        setOpenFiles((prev) => prev.map((f) => (f.id === fileId ? updated : f)));
-        void containerWrite(file.path, content);
-        await maybeReinstall(file, content);
-        saved++;
-      }
-      setEditedContents({});
-      toast.success(saved === 1 ? "Saved 1 file" : `Saved ${saved} files`);
-      setTimeout(() => refresh({ silent: true }), 0);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save all");
-    } finally {
-      setSaving(false);
-    }
-  }, [projectId, refresh, containerWrite, maybeReinstall]);
+  /** Dispose the Monaco model for a closed file (one model per open file). */
+  const disposeFileModel = useCallback((file: ProjectFile) => {
+    removeModelByPath(file.path);
+  }, []);
+
+  /** Discard unsaved edits for the active file (Reset). */
+  const handleReset = useCallback(() => {
+    if (!activeFile) return;
+    setEditedContents((prev) => {
+      if (prev[activeFile.id] === undefined) return prev;
+      const next = { ...prev };
+      delete next[activeFile.id];
+      return next;
+    });
+    workspaceRef.current?.updateFile(activeFile.path, activeFile.content ?? "");
+    void containerWrite(activeFile.path, activeFile.content ?? "");
+    toast.info("Changes discarded");
+  }, [activeFile, containerWrite]);
 
   const requestClose = useCallback((file: ProjectFile) => {
     const dirty = editedContents[file.id] !== undefined && editedContents[file.id] !== (file.content ?? "");
@@ -389,12 +303,13 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
         delete next[file.id];
         return next;
       });
+      disposeFileModel(file);
       if (activeFileId === file.id) {
         const remaining = openFiles.filter((f) => f.id !== file.id);
         setActiveFileId(remaining.length ? remaining.at(-1)?.id ?? null : null);
       }
     }
-  }, [editedContents, openFiles, activeFileId]);
+  }, [editedContents, openFiles, activeFileId, disposeFileModel]);
 
   const confirmClose = useCallback(async (shouldSave: boolean) => {
     if (!closeTarget) return;
@@ -418,12 +333,14 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
       }
     }
     const id = closeTarget.id;
+    const path = closeTarget.path;
     setOpenFiles((prev) => prev.filter((f) => f.id !== id));
     setEditedContents((prev) => {
       const next = { ...prev };
       delete next[id];
       return next;
     });
+    removeModelByPath(path);
     if (activeFileId === id) {
       const remaining = openFiles.filter((f) => f.id !== id);
       setActiveFileId(remaining.length ? remaining.at(-1)?.id ?? null : null);
@@ -449,7 +366,6 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
           runtime.mkdir(createdPath).catch(() => toast.error("Sync to runtime failed"));
         } else {
           void containerWrite(createdPath, "");
-          ensureFileModel(createdPath, "", unique);
         }
       }
       if (parentId) setExpanded((s) => new Set(s).add(parentId));
@@ -458,7 +374,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to create");
     }
-  }, [projectId, pushHistory, refresh, handleOpenFile, containerWrite, runtime, ensureFileModel]);
+  }, [projectId, pushHistory, refresh, handleOpenFile, containerWrite, runtime]);
 
   const handleRename = useCallback(async (file: ProjectFile, newName: string) => {
     const trimmed = newName.trim();
@@ -485,7 +401,6 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
             const pending = editedContentsRef.current[f.id];
             const content = pending ?? f.content ?? "";
             await containerWrite(f.path, content);
-            ensureFileModel(f.path, content, f.name);
           }
         } else {
           workspaceRef.current?.deleteFile(oldPath);
@@ -498,7 +413,6 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
             }
           }
           await containerWrite(newPath, currentContent);
-          ensureFileModel(newPath, currentContent, unique);
         }
         // Drop stale models for renamed folder contents.
         for (const p of oldSubtree) removeModelByPath(p);
@@ -508,7 +422,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
       toast.error(e instanceof Error ? e.message : "Rename failed");
       await refresh({ silent: true });
     }
-  }, [projectId, pushHistory, refresh, containerWrite, containerRemove, runtime, ensureFileModel]);
+  }, [projectId, pushHistory, refresh, containerWrite, containerRemove, runtime]);
 
   const handleDelete = useCallback(async (file: ProjectFile) => {
     pushHistory([...filesRef.current]);
@@ -571,18 +485,16 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
         if (file.isFolder) {
           for (const f of filesUnder(arr, newPath)) {
             await containerWrite(f.path, f.content ?? "");
-            ensureFileModel(f.path, f.content ?? "", f.name);
           }
         } else {
           await containerWrite(newPath, file.content ?? "");
-          ensureFileModel(newPath, file.content ?? "", unique);
         }
       }
       toast.success("Duplicated");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Duplicate failed");
     }
-  }, [projectId, pushHistory, refresh, containerWrite, ensureFileModel]);
+  }, [projectId, pushHistory, refresh, containerWrite]);
 
   const handlePaste = useCallback(async (target: ProjectFile) => {
     if (!clipboard) return;
@@ -621,14 +533,12 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
             const pending = editedContentsRef.current[f.id];
             const content = pending ?? f.content ?? "";
             await containerWrite(f.path, content);
-            ensureFileModel(f.path, content, f.name);
           }
         } else {
           const content = clipboard.op === "cut"
             ? (editedContentsRef.current[src.id] ?? src.content ?? "")
             : (src.content ?? "");
           await containerWrite(newPath, content);
-          ensureFileModel(newPath, content, src.name);
         }
       }
       if (pasteParentId) setExpanded((s) => new Set(s).add(pasteParentId));
@@ -636,7 +546,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Paste failed");
     }
-  }, [clipboard, projectId, pushHistory, refresh, containerWrite, containerRemove, ensureFileModel]);
+  }, [clipboard, projectId, pushHistory, refresh, containerWrite, containerRemove]);
 
   const handleAction = useCallback((action: string, file: ProjectFile) => {
     const resolveParent = (f: ProjectFile) => {
@@ -740,48 +650,108 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
     document.addEventListener("mouseup", handleMouseUp);
   }, [sidebarWidth]);
 
+  const visibleFiles =
+    leftTab === "search" && searchQuery.trim()
+      ? files.filter(
+          (f) =>
+            !f.isFolder &&
+            f.path.toLowerCase().includes(searchQuery.trim().toLowerCase()),
+        )
+      : files;
+
   return (
     <div className="flex h-full w-full overflow-hidden">
-      <aside
-        style={{ width: sidebarWidth }}
-        className="shrink-0 border-r flex flex-col overflow-hidden bg-card"
-      >
-        <div className="flex h-9 shrink-0 items-center justify-between border-b px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          <span>Explorer</span>
-          <span className="text-[11px]">{clipboard ? `${clipboard.op}: ${clipboard.file.name}` : ""}</span>
-        </div>
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
-          {loading ? <div className="p-4 text-sm">Loading files...</div> : (
-            <FileTree
-              projectId={projectId}
-              files={files}
-              selectedFileId={activeFileId}
-              onSelectFile={handleOpenFile}
-              expanded={expanded}
-              onToggle={toggle}
-              onAction={handleAction}
-              editingId={editingId}
-              onRename={handleRename}
-              onEndEdit={() => setEditingId(null)}
-              clipboard={clipboard}
-              canUndo={history.length > 0}
-              canRedo={future.length > 0}
-              pendingCreate={pendingCreate}
-              onCreateChange={(v) => setPendingCreate((p) => (p ? { ...p, value: v } : p))}
-              onCreateConfirm={confirmCreate}
-              onCreateCancel={cancelCreate}
-            />
-          )}
-        </div>
-      </aside>
+      {!sidebarCollapsed && (
+        <>
+          <aside
+            style={{ width: sidebarWidth }}
+            className="shrink-0 border-r flex flex-col overflow-hidden bg-card"
+          >
+            <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <button
+                onClick={() => setLeftTab("files")}
+                className={`flex items-center gap-1.5 rounded px-2 py-1 ${leftTab === "files" ? "bg-accent text-foreground" : "hover:text-foreground"}`}
+              >
+                Files
+              </button>
+              <button
+                onClick={() => setLeftTab("search")}
+                className={`flex items-center gap-1.5 rounded px-2 py-1 ${leftTab === "search" ? "bg-accent text-foreground" : "hover:text-foreground"}`}
+              >
+                Search
+              </button>
+              <span className="flex-1" />
+              <button
+                onClick={() => setSidebarCollapsed(true)}
+                className="rounded p-1 hover:bg-accent hover:text-foreground"
+                title="Collapse panel"
+              >
+                <PanelLeftClose className="size-4" />
+              </button>
+            </div>
+            {leftTab === "search" && (
+              <div className="shrink-0 border-b p-2">
+                <div className="flex items-center gap-2 rounded border bg-background px-2 py-1.5 text-xs">
+                  <Search className="size-3.5 shrink-0 text-muted-foreground" />
+                  <input
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="Search files…"
+                    className="w-full bg-transparent outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+              </div>
+            )}
+            <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
+              {loading ? <div className="p-4 text-sm">Loading files...</div> : (
+                <FileTree
+                  projectId={projectId}
+                  files={visibleFiles}
+                  selectedFileId={activeFileId}
+                  onSelectFile={handleOpenFile}
+                  expanded={expanded}
+                  onToggle={toggle}
+                  onAction={handleAction}
+                  editingId={editingId}
+                  onRename={handleRename}
+                  onEndEdit={() => setEditingId(null)}
+                  clipboard={clipboard}
+                  canUndo={history.length > 0}
+                  canRedo={future.length > 0}
+                  pendingCreate={pendingCreate}
+                  onCreateChange={(v) => setPendingCreate((p) => (p ? { ...p, value: v } : p))}
+                  onCreateConfirm={confirmCreate}
+                  onCreateCancel={cancelCreate}
+                />
+              )}
+            </div>
+            {clipboard && (
+              <div className="shrink-0 border-t px-3 py-1.5 text-[11px] text-muted-foreground">
+                {clipboard.op}: {clipboard.file.name}
+              </div>
+            )}
+          </aside>
 
-      <div
-        onMouseDown={handleResizeStart}
-        className={`w-1 shrink-0 cursor-col-resize hover:bg-primary/20 transition-colors ${isResizing ? "bg-primary/20" : ""}`}
-      />
+          <div
+            onMouseDown={handleResizeStart}
+            className={`w-1 shrink-0 cursor-col-resize hover:bg-primary/20 transition-colors ${isResizing ? "bg-primary/20" : ""}`}
+          />
+        </>
+      )}
 
       <main className="min-w-0 flex flex-1 flex-col overflow-hidden bg-background">
-        {/* VS Code style tabs - light */}
+        {sidebarCollapsed && (
+          <div className="flex h-9 shrink-0 items-center border-b bg-muted/40 px-2">
+            <button
+              onClick={() => setSidebarCollapsed(false)}
+              className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Expand file panel"
+            >
+              <PanelLeftOpen className="size-4" />
+            </button>
+          </div>
+        )}
+        {/* Tabbed editor area */}
         {openFiles.length > 0 && (
           <div className="flex h-9 shrink-0 items-center overflow-x-auto border-b bg-muted/40 scrollbar-thin">
             {openFiles.map((of) => {
@@ -807,37 +777,39 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
             })}
           </div>
         )}
+        {/* Breadcrumb + Save/Reset */}
         {activeFile && (
-          <div className="flex h-8 shrink-0 items-center justify-end gap-3 border-b bg-background px-4 text-xs">
-            <button
-              onClick={() => setShowProblems((v) => !v)}
-              className={`rounded px-2 py-1 ${showProblems ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"}`}
-              title="Toggle Problems panel"
-            >
-              Problems
-              {problemCounts.errors + problemCounts.warnings > 0 &&
-                ` (${problemCounts.errors + problemCounts.warnings})`}
-            </button>
-            <span className={saving ? "text-muted-foreground" : isActiveDirty ? "text-yellow-600" : "text-muted-foreground"}>
-              {saving ? "Saving..." : isActiveDirty ? "● Unsaved" : "Saved"}
-            </span>
-            <button
-              onClick={handleSaveAll}
-              disabled={Object.keys(editedContents).length === 0 || saving}
-              className="rounded border px-3 py-1 text-xs hover:bg-accent disabled:opacity-50"
-              title="Save all dirty files"
-            >
-              Save All
-              {Object.keys(editedContents).length > 1 &&
-                ` (${Object.keys(editedContents).length})`}
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={!isActiveDirty || saving}
-              className="rounded bg-primary px-3 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-            >
-              Save (Ctrl+S)
-            </button>
+          <div className="flex h-8 shrink-0 items-center justify-between gap-3 border-b bg-background px-4 text-xs">
+            <nav className="flex min-w-0 items-center gap-1 truncate text-muted-foreground" aria-label="Breadcrumb">
+              {activeFile.path.split("/").map((part, i, arr) => (
+                <span key={i} className="flex shrink-0 items-center gap-1">
+                  {i > 0 && <ChevronRight className="size-3 text-muted-foreground/60" />}
+                  <span className={i === arr.length - 1 ? "font-medium text-foreground" : ""}>
+                    {part}
+                  </span>
+                </span>
+              ))}
+            </nav>
+            <div className="flex shrink-0 items-center gap-2">
+              <span className={saving ? "text-muted-foreground" : isActiveDirty ? "text-yellow-600" : "text-muted-foreground"}>
+                {saving ? "Saving..." : isActiveDirty ? "● Unsaved" : "Saved"}
+              </span>
+              <button
+                onClick={handleReset}
+                disabled={!isActiveDirty || saving}
+                className="rounded border px-3 py-1 text-xs hover:bg-accent disabled:opacity-50"
+                title="Discard unsaved changes"
+              >
+                Reset
+              </button>
+              <button
+                onClick={handleSave}
+                disabled={!isActiveDirty || saving}
+                className="rounded bg-primary px-3 py-1 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+              >
+                Save (Ctrl+S)
+              </button>
+            </div>
           </div>
         )}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
@@ -849,52 +821,12 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
               onChange={(v) => handleContentChange(activeFile.id, v)}
               onSave={handleSave}
               saving={saving}
-              template={template}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a file to begin editing.</div>
           )}
         </div>
-        {showProblems && (
-          <div
-            className="shrink-0 border-t bg-background"
-            style={{ height: problemsHeight }}
-          >
-            <div
-              onMouseDown={(e) => {
-                e.preventDefault();
-                setIsResizingProblems(true);
-                const startY = e.clientY;
-                const startHeight = problemsHeight;
-
-                const handleMouseMove = (moveEvent: MouseEvent) => {
-                  const diff = moveEvent.clientY - startY;
-                  setProblemsHeight(
-                    Math.min(Math.max(startHeight - diff, 100), 500),
-                  );
-                };
-                const handleMouseUp = () => {
-                  setIsResizingProblems(false);
-                  document.removeEventListener("mousemove", handleMouseMove);
-                  document.removeEventListener("mouseup", handleMouseUp);
-                };
-
-                document.addEventListener("mousemove", handleMouseMove);
-                document.addEventListener("mouseup", handleMouseUp);
-              }}
-              className={`h-1 w-full cursor-row-resize transition-colors hover:bg-primary/20 ${isResizingProblems ? "bg-primary/20" : ""}`}
-            />
-            <div className="h-[calc(100%-4px)]">
-              <ProblemsPanel
-                onSelectProblem={handleSelectProblem}
-                refreshToken={openFiles.length}
-                onCountChange={(errors, warnings) =>
-                  setProblemCounts({ errors, warnings })
-                }
-              />
-            </div>
-          </div>
-        )}
+        <BottomPanel />
       </main>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>

@@ -5,8 +5,13 @@ import Editor, { type OnMount } from "@monaco-editor/react";
 import { useTheme } from "next-themes";
 import type { ProjectFile } from "@/types/file";
 import { getLanguage } from "@/lib/file-icons";
-import { ensureModel, flushPendingLanguageSetup, initLanguage, setSharedEditor, setSharedMonaco } from "@/lib/language/model-manager";
-import { flushPendingDependencyTypes } from "@/lib/language/dependency-loader";
+import {
+  ensureModel,
+  removeModelByPath,
+  initLanguage,
+  setSharedEditor,
+  setSharedMonaco,
+} from "@/lib/language/model-manager";
 
 interface CodeEditorProps {
   projectId: string;
@@ -15,8 +20,6 @@ interface CodeEditorProps {
   onChange: (value: string) => void;
   onSave: () => Promise<void>;
   saving: boolean;
-  /** Template for TS compiler options. V1: REACT default. */
-  template?: string;
 }
 
 export function CodeEditor({
@@ -26,7 +29,6 @@ export function CodeEditor({
   onChange,
   onSave,
   saving: _saving,
-  template = "REACT",
 }: CodeEditorProps) {
   void _projectId;
   void _saving;
@@ -55,11 +57,8 @@ export function CodeEditor({
     monacoRef.current = monaco;
     setSharedMonaco(monaco);
     setSharedEditor(editor);
-    initLanguage(monaco, template);
-    // Project truth (tsconfig options + full model graph) overrides the
-    // template fallback above when the layout has requested it.
-    flushPendingLanguageSetup();
-    flushPendingDependencyTypes();
+    // Strip-down: no diagnostics, no type graph, no definition provider.
+    initLanguage(monaco);
     if (file) {
       activePathRef.current = file.path;
       editor.setModel(
@@ -72,9 +71,8 @@ export function CodeEditor({
     editor.focus();
   };
 
-  // Tab switch (or external update): swap to the stable per-path model.
-  // Models persist across tabs — never recreated — so the TS worker keeps
-  // full project context for cross-file imports.
+  // Tab switch: swap to the open file's model (created on open).
+  // The layout disposes a file's model when its tab closes.
   useEffect(() => {
     const editor = editorRef.current;
     const monaco = monacoRef.current;
@@ -93,8 +91,7 @@ export function CodeEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file?.path]);
 
-  // External value sync (e.g. post-save refresh): typing flows
-  // Monaco -> onChange -> parent, so equal values are a no-op here.
+  // External value sync (e.g. post-save refresh).
   useEffect(() => {
     const model = editorRef.current?.getModel();
     if (
@@ -107,8 +104,15 @@ export function CodeEditor({
     }
   }, [value, file]);
 
+  // Dispose this file's model when its tab closes (unmount on path change).
+  const filePath = file?.path;
+  useEffect(() => {
+    return () => {
+      if (filePath) removeModelByPath(filePath);
+    };
+  }, [filePath]);
+
   const { resolvedTheme } = useTheme();
-  // resolvedTheme is undefined pre-mount — default to light to match SSR (no `dark` class on server).
   const monacoTheme = resolvedTheme === "dark" ? "vs-dark" : "vs";
 
   if (!file) {
@@ -132,6 +136,31 @@ export function CodeEditor({
             tabSize: 2,
             wordWrap: "on",
             scrollBeyondLastLine: false,
+            // Bolt-style: no navigation affordances.
+            links: false,
+            gotoLocation: {
+              multiple: "goto",
+              multipleDefinitions: "goto",
+              multipleTypeDefinitions: "goto",
+              multipleDeclarations: "goto",
+              multipleImplementations: "goto",
+              multipleReferences: "goto",
+              alternativeDefinitionCommand: "",
+              alternativeTypeDefinitionCommand: "",
+              alternativeDeclarationCommand: "",
+              alternativeImplementationCommand: "",
+              alternativeReferenceCommand: "",
+            },
+            definitionLinkOpensInPeek: false,
+            hover: { enabled: "off" },
+            parameterHints: { enabled: false },
+            suggestOnTriggerCharacters: false,
+            quickSuggestions: {
+              other: true,
+              comments: false,
+              strings: false,
+            },
+            codeLens: false,
           }}
         />
       </div>

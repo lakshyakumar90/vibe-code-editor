@@ -1,12 +1,10 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { ExternalLink, Monitor, Moon, RotateCcw, RotateCw, Sun } from "lucide-react";
+import { ExternalLink, Monitor, Moon, Play, RotateCcw, RotateCw, Sun } from "lucide-react";
 import { useTheme } from "next-themes";
 import { useRuntime } from "./runtime-provider";
-import { TerminalPanel } from "./terminal-panel";
 
-type SidebarTab = "preview" | "terminal";
 type PreviewAppearance = "system" | "light" | "dark";
 
 const APPEARANCE_ORDER: PreviewAppearance[] = ["system", "light", "dark"];
@@ -15,13 +13,12 @@ const MIN_SIDEBAR_WIDTH = 300;
 const MAX_SIDEBAR_WIDTH = 800;
 
 /**
- * Right sidebar: dev-server preview + persistent xterm terminal.
- * Install/dev process output is mirrored into the terminal scrollback,
- * which survives tab switches (the terminal stays mounted while hidden).
+ * Right sidebar: dev-server preview only.
+ * Terminals live in the bottom panel (one tab per shell).
  */
 export function PreviewPanel() {
-  const { status, previewUrl, error, reset } = useRuntime();
-  const [tab, setTab] = useState<SidebarTab>("preview");
+  const { status, previewUrl, error, reset, restartDev } = useRuntime();
+  const [restarting, setRestarting] = useState(false);
   const [frameKey, setFrameKey] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState(420);
   const [isResizing, setIsResizing] = useState(false);
@@ -88,20 +85,7 @@ export function PreviewPanel() {
         className="flex h-full flex-col overflow-hidden border-l bg-card"
       >
       <div className="flex h-9 shrink-0 items-center justify-between border-b px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setTab("preview")}
-            className={`rounded px-2 py-1 ${tab === "preview" ? "bg-accent text-foreground" : "hover:text-foreground"}`}
-          >
-            Preview
-          </button>
-          <button
-            onClick={() => setTab("terminal")}
-            className={`rounded px-2 py-1 ${tab === "terminal" ? "bg-accent text-foreground" : "hover:text-foreground"}`}
-          >
-            Terminal
-          </button>
-        </div>
+        <span>Preview</span>
         <span className="flex items-center gap-1.5" data-testid="runtime-status">
           <span
             className={`size-2 rounded-full ${
@@ -109,15 +93,16 @@ export function PreviewPanel() {
                 ? "bg-green-500"
                 : status === "error"
                   ? "bg-red-500"
-                  : "bg-yellow-500 animate-pulse"
+                  : status === "stopped"
+                    ? "bg-muted-foreground/40"
+                    : "bg-yellow-500 animate-pulse"
             }`}
           />
           {status}
         </span>
       </div>
 
-      {tab === "preview" && (
-        <div className="flex h-8 shrink-0 items-center gap-1 border-b bg-muted/40 px-2 text-xs">
+      <div className="flex h-8 shrink-0 items-center gap-1 border-b bg-muted/40 px-2 text-xs">
           <span
             className="min-w-0 flex-1 truncate rounded bg-background px-2 py-1 text-muted-foreground"
             title={previewUrl ?? "No preview URL yet"}
@@ -158,17 +143,10 @@ export function PreviewPanel() {
           >
             <ExternalLink className="size-3.5" />
           </a>
-        </div>
-      )}
+      </div>
 
       <div className="min-h-0 flex-1 bg-background">
-        {/* Kept mounted so the shell survives tab switches; the
-            ResizeObserver in TerminalPanel re-fits on reveal. */}
-        <div className={`h-full w-full ${tab === "terminal" ? "" : "hidden"}`}>
-          <TerminalPanel active={tab === "terminal"} />
-        </div>
-        {tab === "preview" &&
-          (previewUrl ? (
+        {previewUrl ? (
             <div
               className={`h-full w-full ${previewDark ? "bg-[#0c0c0c]" : "bg-white"}`}
               style={{ colorScheme: previewDark ? "dark" : "light" }}
@@ -192,7 +170,7 @@ export function PreviewPanel() {
                     {error ?? "Unknown error."}
                   </span>
                   <span className="text-xs">
-                    Check the Terminal tab for details.
+                    Check the terminal in the bottom panel for details.
                   </span>
                   <button
                     onClick={reset}
@@ -200,6 +178,26 @@ export function PreviewPanel() {
                   >
                     <RotateCcw className="size-3.5" />
                     Retry boot
+                  </button>
+                </>
+              ) : status === "stopped" ? (
+                <>
+                  <span className="font-medium text-foreground">
+                    Dev server stopped
+                  </span>
+                  <span className="text-xs">
+                    The terminal shell was closed or interrupted (Ctrl+C).
+                  </span>
+                  <button
+                    onClick={() => {
+                      setRestarting(true);
+                      void restartDev().finally(() => setRestarting(false));
+                    }}
+                    disabled={restarting}
+                    className="mt-1 flex items-center gap-1.5 rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    <Play className="size-3.5" />
+                    {restarting ? "Restarting…" : "Restart dev server"}
                   </button>
                 </>
               ) : (
@@ -213,7 +211,7 @@ export function PreviewPanel() {
                 </>
               )}
             </div>
-          ))}
+          )}
       </div>
       </aside>
     </div>

@@ -5,9 +5,10 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { useTheme } from "next-themes";
-import { useRuntime } from "./runtime-provider";
+import { BOOT_TERMINAL_ID, useRuntime } from "./runtime-provider";
 import type { ShellHandle } from "@/lib/webcontainer/runtime";
 
+/** Follows the app theme (next-themes): dark terminal in dark mode. */
 function terminalTheme(dark: boolean) {
   return dark
     ? {
@@ -25,9 +26,17 @@ function terminalTheme(dark: boolean) {
 }
 
 /**
+ * One independent shell session: its own xterm.js instance + FitAddon +
+ * its own `jsh` process against the shared WebContainer.
+ *
+ * The component stays mounted (hidden when inactive) so the shell process
+ * survives tab switches. The process is killed only on unmount, i.e. when
+ * the user explicitly closes the tab. An optional `shells` registry lets
+ * the parent track the Map<terminalId, ShellHandle>.
+ */
+/**
  * Write stored log chunks into the terminal (newlines normalized for xterm).
- * Returns the new write index. Terminal scrollback persists across tab
- * switches because this component stays mounted.
+ * Returns the new write index.
  */
 function writeLogs(term: Terminal, logs: string[], from: number): number {
   let idx = from;
@@ -37,32 +46,37 @@ function writeLogs(term: Terminal, logs: string[], from: number): number {
   return idx;
 }
 
-/**
- * Interactive WebContainer shell (`jsh`) via xterm.js.
- * Mounts once; the shell spawns when the panel is actually visible with
- * sane dimensions. Spawning while hidden yields 0-width dims and garbles
- * the shell's prompt rendering.
- *
- * Install/dev process logs are mirrored into the same scrollback so there
- * is a single persistent terminal surface (no separate Output view).
- */
-export function TerminalPanel({ active }: { active: boolean }) {
-  const { runtime, status, logs } = useRuntime();
+export function TerminalInstance({
+  id,
+  active,
+  feedLogs,
+}: {
+  id: string;
+  active: boolean;
+  /** Boot/install/dev log chunks mirrored into this shell's scrollback. */
+  feedLogs?: string[];
+}) {
+  const { runtime, status, stopDev } = useRuntime();
+  // Ref mirrors: the mount/spawn effects must keep a fixed dep-array size
+  // across renders (and HMR swaps) — React throws if it ever changes.
+  const stopRef = useRef(stopDev);
+  stopRef.current = stopDev;
+  const statusRef = useRef(status);
+  statusRef.current = status;
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme === "dark";
 
   const hostRef = useRef<HTMLDivElement>(null);
+  const logIndexRef = useRef(0);
+  const feedLogsRef = useRef(feedLogs);
+  feedLogsRef.current = feedLogs;
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
   const shellRef = useRef<ShellHandle | null>(null);
   const spawnStartedRef = useRef(false);
-  const logIndexRef = useRef(0);
-  const logsRef = useRef(logs);
-  logsRef.current = logs;
-  /** True once the host has a real size (panel visible). */
   const [sized, setSized] = useState(false);
 
-  // Terminal lifecycle — created once per mount.
+  // Terminal lifecycle — created once per mount, disposed on unmount.
   useEffect(() => {
     const host = hostRef.current;
     if (!host) return;
@@ -71,29 +85,41 @@ export function TerminalPanel({ active }: { active: boolean }) {
       cursorBlink: true,
       fontSize: 12,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-      theme: terminalTheme(false),
-      scrollback: 1000,
+      theme: terminalTheme(document.documentElement.classList.contains("dark")),
+      scrollback: 5000,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
     term.open(host);
-    // Skip fitting while hidden (0-width host produces garbage dims).
     if (host.clientWidth > 0) {
-      fit.fit();
-      setSized(true);
+      try {
+        fit.fit();
+        setSized(true);
+      } catch {
+        // hidden on first mount — observer re-fits on reveal
+      }
     }
 
     termRef.current = term;
     fitRef.current = fit;
-    // Drain any process logs that arrived before the terminal existed.
-    logIndexRef.current = writeLogs(term, logsRef.current, 0);
+    // Drain any boot logs that arrived before the terminal existed.
+    logIndexRef.current = writeLogs(term, feedLogsRef.current ?? [], 0);
 
     const dataDisposer = term.onData((data) => {
+      // Ctrl+C in the boot terminal stops the managed dev server (the
+      // shell itself is idle — our dev process is detached). The byte is
+      // still forwarded so any user-run foreground process sees it too.
+      if (
+        data.includes("\x03") &&
+        id === BOOT_TERMINAL_ID &&
+        (statusRef.current === "ready" || statusRef.current === "starting")
+      ) {
+        stopRef.current();
+      }
       shellRef.current?.write(data);
     });
     const observer = new ResizeObserver(() => {
       const el = hostRef.current;
-      // Hidden or collapsed — don't fit, don't resize the pty.
       if (!el || el.clientWidth < 50) return;
       try {
         fit.fit();
@@ -117,7 +143,7 @@ export function TerminalPanel({ active }: { active: boolean }) {
       termRef.current = null;
       fitRef.current = null;
     };
-  }, []);
+  }, [id]);
 
   // Follow the app theme without recreating the terminal.
   useEffect(() => {
@@ -126,28 +152,33 @@ export function TerminalPanel({ active }: { active: boolean }) {
     }
   }, [dark]);
 
-  // Mirror install/dev process logs into the scrollback. The terminal
-  // stays mounted across tab switches, so history persists.
+  // Re-fit when revealed (hidden tabs have 0 width while inactive).
   useEffect(() => {
+    if (!active) return;
     const term = termRef.current;
-    if (!term) return;
-    if (logs.length < logIndexRef.current) {
-      // Logs were cleared (retry) — reset the surface too.
-      term.clear();
-      logIndexRef.current = 0;
-    }
-    logIndexRef.current = writeLogs(term, logs, logIndexRef.current);
-  }, [logs]);
+    const fit = fitRef.current;
+    if (!term || !fit) return;
+    // Wait a frame so the container has layout.
+    const raf = requestAnimationFrame(() => {
+      try {
+        fit.fit();
+        setSized(true);
+        shellRef.current?.resize(term.cols, term.rows);
+      } catch {
+        // ignore
+      }
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [active]);
 
   // Spawn the shell once the container exists AND the panel is visible
-  // with sane dimensions. Re-runs on tab reveal (via `sized`/`active`).
+  // with sane dimensions.
   useEffect(() => {
     if (!active || !sized) return;
     if (status === "idle" || status === "booting" || status === "error") return;
     const term = termRef.current;
     const fit = fitRef.current;
     if (!term || !fit || spawnStartedRef.current || shellRef.current) return;
-    // Re-fit now that we're visible; bail if dims are still broken.
     try {
       fit.fit();
     } catch {
@@ -163,7 +194,7 @@ export function TerminalPanel({ active }: { active: boolean }) {
         });
         shellRef.current = shell;
         void shell.onExit.then(() => {
-          shellRef.current = null;
+          if (shellRef.current === shell) shellRef.current = null;
           term.writeln("\r\n[terminal] shell exited.");
         });
       } catch {
@@ -171,26 +202,52 @@ export function TerminalPanel({ active }: { active: boolean }) {
         spawnStartedRef.current = false;
       }
     })();
-  }, [runtime, status, active, sized]);
+  }, [runtime, status, active, sized, id]);
+
+  // Mirror boot/install/dev logs into this shell's scrollback (e.g. the
+  // first terminal shows `❯ npm install` + output). Persists across tab
+  // switches since the instance stays mounted while hidden.
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term || !feedLogs) return;
+    if (feedLogs.length < logIndexRef.current) {
+      term.clear();
+      logIndexRef.current = 0;
+    }
+    logIndexRef.current = writeLogs(term, feedLogs, logIndexRef.current);
+  }, [feedLogs]);
 
   const waiting =
     status === "idle" || status === "booting" || !active || !sized;
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-background">
+    <div
+      className={`relative h-full w-full overflow-hidden ${dark ? "bg-[#0c0c0c]" : "bg-white"}`}
+    >
       <div ref={hostRef} className="h-full w-full p-1" />
       {waiting && (
-        <div className="absolute inset-0 flex items-center justify-center bg-background/80 text-xs text-muted-foreground">
+        <div
+          className={`absolute inset-0 flex items-center justify-center text-xs text-muted-foreground ${dark ? "bg-[#0c0c0c]/80" : "bg-white/80"}`}
+        >
           {status === "idle" || status === "booting"
             ? "Waiting for WebContainer…"
-            : "Open the Terminal tab to start a shell…"}
+            : "Starting shell…"}
         </div>
       )}
       {status === "error" && (
-        <div className="absolute inset-0 flex items-center justify-center bg-background/80 p-4 text-center text-xs text-muted-foreground">
+        <div
+          className={`absolute inset-0 flex items-center justify-center p-4 text-center text-xs text-muted-foreground ${dark ? "bg-[#0c0c0c]/80" : "bg-white/80"}`}
+        >
           Terminal unavailable — runtime failed to boot.
         </div>
       )}
     </div>
   );
+}
+
+/**
+ * Legacy single-terminal entry (kept for compat; prefers TerminalInstance).
+ */
+export function TerminalPanel({ active }: { active: boolean }) {
+  return <TerminalInstance id="terminal" active={active} />;
 }
