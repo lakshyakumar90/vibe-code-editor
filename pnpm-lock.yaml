@@ -142,6 +142,9 @@ importers:
       '@monaco-editor/react':
         specifier: ^4.7.0
         version: 4.7.0(monaco-editor@0.56.0)(react-dom@19.2.0(react@19.2.0))(react@19.2.0)
+      '@repo/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@repo/templates':
         specifier: workspace:^
         version: link:../../packages/templates

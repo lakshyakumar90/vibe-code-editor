@@ -826,7 +826,15 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a file to begin editing.</div>
           )}
         </div>
-        <BottomPanel />
+        <BottomPanel
+          attachables={openFiles
+            .filter((f) => !f.isFolder)
+            .map((f) => ({
+              id: f.id,
+              path: f.path,
+              content: editedContents[f.id] ?? f.content ?? "",
+            }))}
+        />
       </main>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>

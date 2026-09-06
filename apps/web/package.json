@@ -13,6 +13,7 @@
   "dependencies": {
     "@hookform/resolvers": "^5.4.0",
     "@monaco-editor/react": "^4.7.0",
+    "@repo/ai": "workspace:*",
     "@repo/templates": "workspace:^",
     "@repo/ui": "workspace:*",
     "@repo/validation": "workspace:*",
