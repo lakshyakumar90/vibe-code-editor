@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -25,16 +25,16 @@ let termCounter = 1;
  * spawn new terminals. Collapse/expand chevron on the far right.
  *
  * Install (`❯ npm install`) and dev-server (`❯ npm run dev`) output is
- * mirrored into Terminal 1's scrollback; Ctrl+C there (or closing it)
+ * mirrored into Terminal 1's scrollback (read-only log view); Ctrl+C there
  * stops the dev server and the preview. Other terminals are clean
- * interactive shells.
+ * interactive shells. Closing any tab never kills the dev server.
  *
  * Each terminal tab owns an independent xterm instance + jsh process.
  * Instances stay mounted while hidden so shells persist across tab
  * switches; closing a tab kills that process.
  */
 export function BottomPanel() {
-  const { logs, status, stopDev } = useRuntime();
+  const { logs, status } = useRuntime();
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme === "dark";
   const [terminals, setTerminals] = useState<TermTab[]>(() => [
@@ -54,9 +54,9 @@ export function BottomPanel() {
   const closeTerminal = useCallback(
     (id: string, e: React.MouseEvent) => {
       e.stopPropagation();
-      // Closing Terminal 1 stops the dev server first so the preview
-      // stops too; unmount disposes the tab's xterm instance.
-      if (id === BOOT_TERMINAL_ID) stopDev();
+      // The dev server is a detached process — closing any terminal tab
+      // (including Terminal 1, now a read-only log view) never kills it.
+      // Unmount disposes that tab's xterm instance only.
       setTerminals((prev) => {
         const next = prev.filter((t) => t.id !== id);
         if (active === id && next.length > 0) {
@@ -65,8 +65,21 @@ export function BottomPanel() {
         return next;
       });
     },
-    [active, stopDev],
+    [active],
   );
+
+  // Restart / (re)install runs headless — make sure its output is visible:
+  // recreate Terminal 1 if closed, focus it, and expand the panel.
+  useEffect(() => {
+    if (status === "installing" || status === "starting") {
+      setTerminals((prev) => {
+        if (prev.some((t) => t.id === BOOT_TERMINAL_ID)) return prev;
+        return [{ id: BOOT_TERMINAL_ID, title: "Terminal 1" }, ...prev];
+      });
+      setActive(BOOT_TERMINAL_ID);
+      setCollapsed(false);
+    }
+  }, [status]);
 
   const running = status === "ready";
   const busy =
@@ -153,6 +166,17 @@ export function BottomPanel() {
       {/* Content */}
       {!collapsed && (
         <div style={{ height: PANEL_HEIGHT }} className={surface}>
+          {terminals.length === 0 && (
+            <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
+              No terminals open.
+              <button
+                onClick={spawnTerminal}
+                className="rounded bg-primary px-2.5 py-1 text-primary-foreground hover:bg-primary/90"
+              >
+                Open terminal
+              </button>
+            </div>
+          )}
           {/* Terminals: stay mounted (hidden when inactive) so shells persist */}
           {terminals.map((t) => (
             <div

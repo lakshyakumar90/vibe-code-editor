@@ -1,13 +1,8 @@
 "use client";
 
 import { useCallback, useState } from "react";
-import { ExternalLink, Monitor, Moon, Play, RotateCcw, RotateCw, Sun } from "lucide-react";
-import { useTheme } from "next-themes";
+import { Maximize, Minimize, Play, RotateCcw, RotateCw } from "lucide-react";
 import { useRuntime } from "./runtime-provider";
-
-type PreviewAppearance = "system" | "light" | "dark";
-
-const APPEARANCE_ORDER: PreviewAppearance[] = ["system", "light", "dark"];
 
 const MIN_SIDEBAR_WIDTH = 300;
 const MAX_SIDEBAR_WIDTH = 800;
@@ -16,26 +11,18 @@ const MAX_SIDEBAR_WIDTH = 800;
  * Right sidebar: dev-server preview only.
  * Terminals live in the bottom panel (one tab per shell).
  */
-export function PreviewPanel() {
+export function PreviewPanel({
+  fullscreen = false,
+  onToggleFullscreen,
+}: {
+  fullscreen?: boolean;
+  onToggleFullscreen?: () => void;
+}) {
   const { status, previewUrl, error, reset, restartDev } = useRuntime();
   const [restarting, setRestarting] = useState(false);
   const [frameKey, setFrameKey] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState(420);
   const [isResizing, setIsResizing] = useState(false);
-  // Preview chrome follows the app theme by default; "light"/"dark" force
-  // the surface explicitly. The framed app itself always renders as designed.
-  const [appearance, setAppearance] = useState<PreviewAppearance>("system");
-  const { resolvedTheme } = useTheme();
-  const previewDark =
-    appearance === "dark" || (appearance === "system" && resolvedTheme === "dark");
-
-  const cycleAppearance = useCallback(() => {
-    setAppearance((prev) => {
-      const next =
-        APPEARANCE_ORDER[(APPEARANCE_ORDER.indexOf(prev) + 1) % APPEARANCE_ORDER.length]!;
-      return next;
-    });
-  }, []);
 
   const handleResizeStart = useCallback(
     (e: React.MouseEvent) => {
@@ -75,14 +62,16 @@ export function PreviewPanel() {
   })();
 
   return (
-    <div className="flex h-full shrink-0 overflow-hidden">
-      <div
-        onMouseDown={handleResizeStart}
-        className={`w-1 shrink-0 cursor-col-resize transition-colors hover:bg-primary/20 ${isResizing ? "bg-primary/20" : ""}`}
-      />
+    <div className={`flex h-full overflow-hidden ${fullscreen ? "min-w-0 flex-1" : "shrink-0"}`}>
+      {!fullscreen && (
+        <div
+          onMouseDown={handleResizeStart}
+          className={`w-1 shrink-0 cursor-col-resize transition-colors hover:bg-primary/20 ${isResizing ? "bg-primary/20" : ""}`}
+        />
+      )}
       <aside
-        style={{ width: sidebarWidth }}
-        className="flex h-full flex-col overflow-hidden border-l bg-card"
+        style={fullscreen ? undefined : { width: sidebarWidth }}
+        className={`flex h-full flex-col overflow-hidden border-l bg-card ${fullscreen ? "w-full border-l-0" : ""}`}
       >
       <div className="flex h-9 shrink-0 items-center justify-between border-b px-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         <span>Preview</span>
@@ -117,45 +106,29 @@ export function PreviewPanel() {
           >
             <RotateCw className="size-3.5" />
           </button>
-          <button
-            onClick={cycleAppearance}
-            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title={`Preview appearance: ${appearance} (click to change)`}
-          >
-            {appearance === "light" ? (
-              <Sun className="size-3.5" />
-            ) : appearance === "dark" ? (
-              <Moon className="size-3.5" />
-            ) : (
-              <Monitor className="size-3.5" />
-            )}
-          </button>
-          <a
-            href={previewUrl ?? undefined}
-            target="_blank"
-            rel="noreferrer"
-            aria-disabled={!previewUrl}
-            onClick={(e) => {
-              if (!previewUrl) e.preventDefault();
-            }}
-            className={`rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground ${!previewUrl ? "pointer-events-none opacity-40" : ""}`}
-            title="Open in new tab"
-          >
-            <ExternalLink className="size-3.5" />
-          </a>
+          {onToggleFullscreen && (
+            <button
+              onClick={onToggleFullscreen}
+              className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title={fullscreen ? "Exit full preview" : "Full preview"}
+            >
+              {fullscreen ? (
+                <Minimize className="size-3.5" />
+              ) : (
+                <Maximize className="size-3.5" />
+              )}
+            </button>
+          )}
       </div>
 
-      <div className="min-h-0 flex-1 bg-background">
+      <div className="min-h-0 flex-1 bg-white">
         {previewUrl ? (
-            <div
-              className={`h-full w-full ${previewDark ? "bg-[#0c0c0c]" : "bg-white"}`}
-              style={{ colorScheme: previewDark ? "dark" : "light" }}
-            >
+            <div className="h-full w-full bg-white" style={{ colorScheme: "light" }}>
               <iframe
                 key={frameKey}
                 title="preview"
                 src={previewUrl}
-                className="h-full w-full border-0 bg-transparent"
+                className="h-full w-full border-0 bg-white"
                 allow="cross-origin-isolated"
               />
             </div>
@@ -186,7 +159,7 @@ export function PreviewPanel() {
                     Dev server stopped
                   </span>
                   <span className="text-xs">
-                    The terminal shell was closed or interrupted (Ctrl+C).
+                    The dev server was stopped (Ctrl+C) or crashed.
                   </span>
                   <button
                     onClick={() => {

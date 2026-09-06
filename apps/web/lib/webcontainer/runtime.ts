@@ -147,8 +147,9 @@ export class ProjectRuntime {
     const container = await this.boot();
     const proc = await container.spawn("jsh", [], {
       terminal: { cols, rows },
-      // Pin a clean prompt; the default renders the container id as cwd
-      // (`~/<id>`). Ignored if the shell doesn't honor PS1.
+      cwd: "/",
+      // Pin a clean prompt; jsh largely ignores PS1, so the boot log
+      // terminal is read-only (no shell) to avoid the `~/<id>` prompt.
       env: { PS1: "~/project ❯ " },
     });
     void pipeOutput(proc.output, onOutput);

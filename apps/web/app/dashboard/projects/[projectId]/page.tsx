@@ -7,7 +7,7 @@ import { PreviewPanel } from "@/components/editor/preview-panel";
 import { RuntimeProvider } from "@/components/editor/runtime-provider";
 import { useProject } from "@/hooks/use-projects";
 import { parseTemplateId } from "@/lib/webcontainer/runtime";
-import { use } from "react";
+import { use, useState } from "react";
 
 interface ProjectEditorPageProps {
   params: Promise<{
@@ -19,6 +19,7 @@ export default function ProjectEditorPage({ params }: ProjectEditorPageProps) {
   const { projectId } = use(params);
   const { project, loading } = useProject(projectId);
   const template = parseTemplateId(project?.template);
+  const [previewFullscreen, setPreviewFullscreen] = useState(false);
 
   return (
     <AuthGuard>
@@ -31,10 +32,15 @@ export default function ProjectEditorPage({ params }: ProjectEditorPageProps) {
         ) : (
           <RuntimeProvider key={template} template={template}>
             <div className="flex min-h-0 flex-1 overflow-hidden">
-              <div className="min-w-0 flex-1">
-                <EditorLayout projectId={projectId} template={template} />
-              </div>
-              <PreviewPanel />
+              {!previewFullscreen && (
+                <div className="min-w-0 flex-1">
+                  <EditorLayout projectId={projectId} template={template} />
+                </div>
+              )}
+              <PreviewPanel
+                fullscreen={previewFullscreen}
+                onToggleFullscreen={() => setPreviewFullscreen((v) => !v)}
+              />
             </div>
           </RuntimeProvider>
         )}

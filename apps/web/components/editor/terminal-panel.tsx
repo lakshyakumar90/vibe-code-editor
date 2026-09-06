@@ -105,16 +105,21 @@ export function TerminalInstance({
     // Drain any boot logs that arrived before the terminal existed.
     logIndexRef.current = writeLogs(term, feedLogsRef.current ?? [], 0);
 
+  // Boot terminal is a read-only log surface (`~/project ❯ npm install`
+  // …output). No interactive shell here, so jsh never prints its
+  // `~/<container-id> ❯` prompt underneath the logs.
+  const isBoot = id === BOOT_TERMINAL_ID;
+
     const dataDisposer = term.onData((data) => {
-      // Ctrl+C in the boot terminal stops the managed dev server (the
-      // shell itself is idle — our dev process is detached). The byte is
-      // still forwarded so any user-run foreground process sees it too.
-      if (
-        data.includes("\x03") &&
-        id === BOOT_TERMINAL_ID &&
-        (statusRef.current === "ready" || statusRef.current === "starting")
-      ) {
-        stopRef.current();
+      if (isBoot) {
+        // Read-only log view: Ctrl+C still stops the managed dev server.
+        if (
+          data.includes("\x03") &&
+          (statusRef.current === "ready" || statusRef.current === "starting")
+        ) {
+          stopRef.current();
+        }
+        return;
       }
       shellRef.current?.write(data);
     });
@@ -172,8 +177,9 @@ export function TerminalInstance({
   }, [active]);
 
   // Spawn the shell once the container exists AND the panel is visible
-  // with sane dimensions.
+  // with sane dimensions. The boot terminal is log-only (no shell).
   useEffect(() => {
+    if (id === BOOT_TERMINAL_ID) return;
     if (!active || !sized) return;
     if (status === "idle" || status === "booting" || status === "error") return;
     const term = termRef.current;
