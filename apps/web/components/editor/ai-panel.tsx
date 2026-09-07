@@ -16,7 +16,13 @@ import {
   ThumbsUp,
   X,
 } from "lucide-react";
-import type { Attachment, PlanTask } from "@repo/ai";
+import type { AiProviderId, Attachment, PlanTask } from "@repo/ai";
+import {
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+  PROVIDER_MODELS,
+  SUPPORTED_PROVIDERS,
+} from "@repo/ai";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { SseTransport } from "@/lib/ai/sse";
@@ -155,6 +161,15 @@ export function AIPanel({
   const [streaming, setStreaming] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
   const [modeOpen, setModeOpen] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
+  const [provider, setProvider] = useState<AiProviderId>(DEFAULT_PROVIDER);
+  const [model, setModel] = useState<string>(DEFAULT_MODEL);
+  // Keep the selected model valid if the registry changes (HMR / edits).
+  useEffect(() => {
+    if (!PROVIDER_MODELS[provider]?.includes(model)) {
+      setModel(PROVIDER_MODELS[provider]?.[0] ?? DEFAULT_MODEL);
+    }
+  }, [provider, model]);
   const transportRef = useRef<SseTransport | null>(null);
 
   // Merge Ask-AI selections from the editor into chips (deduped).
@@ -280,6 +295,8 @@ export function AIPanel({
           code,
         })),
         history,
+        provider,
+        model,
       },
       {
         onToken: (token) => {
@@ -302,6 +319,11 @@ export function AIPanel({
         onDone: () => {
           setStreaming(false);
           streamingIdRef.current = null;
+          // Drop transient "Thinking…/Planning…" — keep only persistent
+          // notices (changeset ready). Otherwise it lingers under the reply.
+          setStatus((prev) =>
+            prev && /changeset/i.test(prev) ? prev : null,
+          );
           setMessages((prev) =>
             prev.map((m) =>
               m.id === assistantId ? { ...m, streaming: false } : m,
@@ -320,7 +342,7 @@ export function AIPanel({
         },
       },
     );
-  }, [input, streaming, messages, mode, chips, projectId, onChangeset]);
+  }, [input, streaming, messages, mode, chips, projectId, onChangeset, provider, model]);
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -346,14 +368,14 @@ export function AIPanel({
           <div className="space-y-4">
             {messages.map((m) =>
               m.role === "user" ? (
-                <div key={m.id} className="flex justify-start">
-                  <div className="max-w-[90%] rounded-lg border bg-muted/50 px-3 py-2 text-[13px] leading-relaxed">
+                <div key={m.id} className="flex justify-end">
+                  <div className="max-w-[90%] rounded-lg bg-primary px-3 py-2 text-[13px] leading-relaxed text-primary-foreground">
                     <div className="whitespace-pre-wrap break-words">{m.content}</div>
                   </div>
                 </div>
               ) : (
                 <div key={m.id} className="space-y-2">
-                  {m.mode && (
+                  {m.mode && (m.streaming || stripAgentBlocks(m.content) !== "" || m.plan) && (
                     <div className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
                       <Bot className="size-3.5" />
                       <span>{m.streaming ? (status ?? "Thinking…") : MODE_META[m.mode].label}</span>
@@ -492,6 +514,57 @@ export function AIPanel({
                           {MODE_META[key].hint}
                         </span>
                       </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            {/* Cursor-style model picker: provider ▸ model, same row as mode */}
+            <div className="relative">
+              <button
+                onClick={() => setModelOpen((v) => !v)}
+                title={`${SUPPORTED_PROVIDERS[provider].label} · ${model}`}
+                aria-label="Model"
+                aria-haspopup="menu"
+                aria-expanded={modelOpen}
+                className="flex max-w-[140px] items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                <span className="truncate">{model}</span>
+                <ChevronDown className={`size-3 shrink-0 transition-transform ${modelOpen ? "rotate-180" : ""}`} />
+              </button>
+              {modelOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setModelOpen(false)} />
+                  <div
+                    role="menu"
+                    className="absolute bottom-9 left-0 z-20 max-h-64 w-56 overflow-y-auto rounded-md border bg-popover p-1 shadow-md"
+                  >
+                    {(Object.keys(PROVIDER_MODELS) as AiProviderId[]).map((pid) => (
+                      <div key={pid}>
+                        <div className="px-2 pb-0.5 pt-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          {SUPPORTED_PROVIDERS[pid].label}
+                        </div>
+                        {PROVIDER_MODELS[pid].map((m) => (
+                          <button
+                            key={`${pid}:${m}`}
+                            role="menuitemradio"
+                            aria-checked={provider === pid && model === m}
+                            onClick={() => {
+                              setProvider(pid);
+                              setModel(m);
+                              setModelOpen(false);
+                            }}
+                            className={`flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left text-xs hover:bg-accent ${
+                              provider === pid && model === m ? "bg-accent/60 font-medium" : ""
+                            }`}
+                          >
+                            {(provider === pid && model === m) && (
+                              <Check className="size-3 shrink-0" />
+                            )}
+                            <span className="truncate">{m}</span>
+                          </button>
+                        ))}
+                      </div>
                     ))}
                   </div>
                 </>

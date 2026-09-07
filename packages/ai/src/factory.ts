@@ -37,7 +37,7 @@ export const SUPPORTED_PROVIDERS: Record<AiProviderId, ProviderMeta> = {
     id: "ollama",
     label: "Ollama (local)",
     envKey: null,
-    defaultModel: "gemma4:e2b",
+    defaultModel: "qwen2.5-coder:7b",
   },
   mock: {
     id: "mock",
@@ -47,8 +47,25 @@ export const SUPPORTED_PROVIDERS: Record<AiProviderId, ProviderMeta> = {
   },
 };
 
+/**
+ * SINGLE PLACE to change providers/models.
+ * Add/remove a model id here and it appears in the API
+ * (`GET /api/ai/providers`) and in the composer picker.
+ */
+export const PROVIDER_MODELS: Record<AiProviderId, string[]> = {
+  openai: ["gpt-4o-mini", "gpt-4o", "o4-mini"],
+  groq: ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b", "qwen/qwen3.6-27b"],
+  gemini: ["gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"],
+  ollama: ["gemma4:e2b"],
+  mock: ["mock-1"],
+};
+
+/** Server default when the client sends no provider/model. */
+export const DEFAULT_PROVIDER: AiProviderId = "ollama";
+export const DEFAULT_MODEL = "gemma4:e2b";
+
 function normalizeId(id: string | undefined): AiProviderId {
-  const norm = (id ?? process.env["AI_PROVIDER"] ?? "ollama").toLowerCase();
+  const norm = (id ?? process.env["AI_PROVIDER"] ?? DEFAULT_PROVIDER).toLowerCase();
   if (norm === "google") return "gemini";
   if ((Object.keys(SUPPORTED_PROVIDERS) as string[]).includes(norm)) {
     return norm as AiProviderId;

@@ -14,7 +14,7 @@ export {
   type PlanTask,
   type PlanTaskStatus,
 } from "./types";
-export { createProvider, SUPPORTED_PROVIDERS, type ProviderMeta } from "./factory";
+export { createProvider, SUPPORTED_PROVIDERS, PROVIDER_MODELS, DEFAULT_PROVIDER, DEFAULT_MODEL, type ProviderMeta } from "./factory";
 export { AIOrchestrator } from "./orchestrator";
 export type {
   GenerateInput,

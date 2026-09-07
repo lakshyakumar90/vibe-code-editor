@@ -5,6 +5,7 @@ import {
   computeDiffs,
   createProvider,
   makeEvent,
+  PROVIDER_MODELS,
   serializeSSE,
   SUPPORTED_PROVIDERS,
   validateChangeSet,
@@ -153,7 +154,7 @@ export const aiController = {
       } catch {
         configured = false;
       }
-      return { ...meta, configured, isDefault: def === id };
+      return { ...meta, models: PROVIDER_MODELS[id], configured, isDefault: def === id };
     });
     return res.json({ success: true, data: providers });
   },

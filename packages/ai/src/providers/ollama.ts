@@ -8,7 +8,7 @@ function baseURL(): string {
 }
 
 function resolveModel(reqModel: string | undefined): string {
-  return reqModel || process.env["OLLAMA_MODEL"] || "gemma4:e2b";
+  return reqModel || process.env["AI_DEFAULT_MODEL"] || process.env["OLLAMA_MODEL"] || "gemma4:e2b";
 }
 
 interface OllamaChatLine {

@@ -37,6 +37,8 @@ export class SseTransport implements AiTransport {
             prompt: opts.prompt,
             attachments: opts.attachments,
             history: opts.history,
+            ...(opts.provider ? { provider: opts.provider } : {}),
+            ...(opts.model ? { model: opts.model } : {}),
           },
           controller.signal,
         );
