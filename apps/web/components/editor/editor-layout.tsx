@@ -13,6 +13,7 @@ import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import { removeModelByPath } from "@/lib/language/model-manager";
 import { BottomPanel } from "./bottom-panel";
 import { AIPanel } from "./ai-panel";
+import { PreviewPanel } from "./preview-panel";
 import { useRuntime } from "./runtime-provider";
 import { toast } from "sonner";
 import {
@@ -34,6 +35,9 @@ interface EditorLayoutProps {
   projectId: string;
   /** Project template — drives runtime commands + TS config. */
   template?: string;
+  agentOpen?: boolean;
+  onAgentChange?: (open: boolean) => void;
+  view?: "code" | "preview";
 }
 
 interface FilesResponse {
@@ -65,7 +69,7 @@ function filesUnder(files: ProjectFile[], dir: string): ProjectFile[] {
   );
 }
 
-export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProps) {
+export function EditorLayout({ projectId, template = "REACT", agentOpen = true, onAgentChange, view = "code" }: EditorLayoutProps) {
   const [files, setFiles] = useState<ProjectFile[]>([]);
   const [loading, setLoading] = useState(true);
   const [openFiles, setOpenFiles] = useState<ProjectFile[]>([]);
@@ -83,7 +87,11 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
   const [closeTarget, setCloseTarget] = useState<ProjectFile | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(288);
   const [aiWidth, setAiWidth] = useState(340);
-  const [aiCollapsed, setAiCollapsed] = useState(false);
+  const aiCollapsed = !agentOpen;
+  const setAiCollapsed = (v: boolean | ((prev: boolean) => boolean)) => {
+    const next = typeof v === "function" ? v(aiCollapsed) : v;
+    onAgentChange?.(!next);
+  };
   const [isResizing, setIsResizing] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [leftTab, setLeftTab] = useState<"files" | "search">("files");
@@ -888,7 +896,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
           </button>
         </div>
       )}
-      {!sidebarCollapsed && (
+      {view === "code" && !sidebarCollapsed && (
         <>
           <aside
             style={{ width: sidebarWidth }}
@@ -967,6 +975,12 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
       )}
 
       <main className="min-w-0 flex flex-1 flex-col overflow-hidden bg-background">
+        {view === "preview" ? (
+          <div className="min-h-0 flex-1">
+            <PreviewPanel fullscreen />
+          </div>
+        ) : (
+        <>
         {sidebarCollapsed && (
           <div className="flex h-9 shrink-0 items-center border-b bg-muted/40 px-2">
             <button
@@ -1147,6 +1161,8 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
           )}
         </div>
         <BottomPanel />
+        </>
+        )}
       </main>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
