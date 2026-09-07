@@ -38,7 +38,11 @@ export {
   type ValidationResult,
 } from "./changeset";
 export { OpenAIProvider } from "./providers/openai";
-export { GroqProvider } from "./providers/groq";
+export {
+  INLINE_FENCE_INSTRUCTION,
+  MAX_RAW_INLINE_CHARS,
+  cleanInlineCompletion,
+} from "./inline";export { GroqProvider } from "./providers/groq";
 export { GeminiProvider } from "./providers/gemini";
 export { OllamaProvider } from "./providers/ollama";
 export { MockProvider } from "./providers/mock";

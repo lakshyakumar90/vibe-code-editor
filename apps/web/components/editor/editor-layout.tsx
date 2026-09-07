@@ -13,6 +13,7 @@ import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import { removeModelByPath } from "@/lib/language/model-manager";
 import { BottomPanel } from "./bottom-panel";
 import { AIPanel } from "./ai-panel";
+import { InlineSettingsButton } from "./inline-settings";
 import { PreviewPanel } from "./preview-panel";
 import { useRuntime } from "./runtime-provider";
 import { toast } from "sonner";
@@ -88,10 +89,13 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   const [sidebarWidth, setSidebarWidth] = useState(288);
   const [aiWidth, setAiWidth] = useState(340);
   const aiCollapsed = !agentOpen;
-  const setAiCollapsed = (v: boolean | ((prev: boolean) => boolean)) => {
-    const next = typeof v === "function" ? v(aiCollapsed) : v;
-    onAgentChange?.(!next);
-  };
+  const setAiCollapsed = useCallback(
+    (v: boolean | ((prev: boolean) => boolean)) => {
+      const next = typeof v === "function" ? v(!agentOpen) : v;
+      onAgentChange?.(!next);
+    },
+    [agentOpen, onAgentChange],
+  );
   const [isResizing, setIsResizing] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [leftTab, setLeftTab] = useState<"files" | "search">("files");
@@ -259,7 +263,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       }
       return [...prev.slice(-9), { ...selection }];
     });
-  }, []);
+  }, [setAiCollapsed]);
 
   const handleAiAttachmentsConsumed = useCallback(() => {
     setAiAttachments([]);
@@ -297,7 +301,19 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       for (const path of applied) {
         const diff = byPath.get(path);
         if (!diff) continue;
-        if (diff.deleted || diff.newContent === null) {
+        if (diff.isFolder && !diff.deleted) {
+          // Folder create: mkdir in the container (a writeFile with null
+          // content here would create a *file* at the folder path).
+          // Drop any phantom workspace entry from earlier buggy syncs —
+          // the workspace map never stores folders.
+          workspaceRef.current?.deleteFile(path);
+          removeModelByPath(path);
+          try {
+            await runtime.mkdir(path);
+          } catch {
+            toast.error("Sync to runtime failed");
+          }
+        } else if (diff.deleted || diff.newContent === null) {
           await containerRemove(path);
         } else {
           await containerWrite(path, diff.newContent);
@@ -318,7 +334,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       });
       await refresh({ silent: true });
     },
-    [containerWrite, containerRemove, refresh],
+    [containerWrite, containerRemove, refresh, runtime],
   );
 
   const handleAcceptFiles = useCallback(
@@ -1040,6 +1056,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
                 <Sparkles className="size-3.5" />
                 AI
               </button>
+              <InlineSettingsButton />
               <span className={saving ? "text-muted-foreground" : isActiveDirty ? "text-yellow-600" : "text-muted-foreground"}>
                 {saving ? "Saving..." : isActiveDirty ? "● Unsaved" : "Saved"}
               </span>

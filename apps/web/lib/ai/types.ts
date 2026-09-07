@@ -13,6 +13,14 @@ export interface AttachmentChip extends Attachment {
   id: string;
 }
 
+/** One completed tool call in a plan/agent run — appended, never overwritten. */
+export interface ToolStep {
+  tool: string;
+  args: Record<string, unknown>;
+  resultSummary: string;
+  timestamp: string;
+}
+
 export interface PanelMessage {
   id: string;
   role: "user" | "assistant";
@@ -21,6 +29,8 @@ export interface PanelMessage {
   mode?: AiPanelMode;
   /** Plan-mode checklist (rendered instead of prose when present). */
   plan?: PlanTask[];
+  /** Persistent tool-activity timeline (plan/agent modes). */
+  steps?: ToolStep[];
   feedback?: "up" | "down" | null;
   streaming?: boolean;
 }
@@ -34,7 +44,7 @@ export interface AttachableFile {
 
 export interface TransportEvents {
   onToken(token: string): void;
-  onStatus(text: string): void;
+  onStatus(text: string, tool?: { name: string; args: Record<string, unknown> }): void;
   onPlan(plan: PlanTask[]): void;
   /** Agent-mode changeset ready for review (Phase 4). Optional. */
   onChangeset?(changeSetId: string): void;

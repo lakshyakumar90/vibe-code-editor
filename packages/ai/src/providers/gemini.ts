@@ -1,4 +1,5 @@
 import type { AiProvider, ChatRequest, InlineRequest } from "../types";
+import { INLINE_FENCE_INSTRUCTION } from "../inline";
 import { sseDataLines } from "./stream";
 
 /** Google Gemini via the Generative Language REST API (SSE streaming). */
@@ -127,7 +128,7 @@ export class GeminiProvider implements AiProvider {
           systemInstruction: {
             parts: [
               {
-                text: "You are a code completion engine. Return only the code that continues the snippet — no explanations, no fences.",
+                text: INLINE_FENCE_INSTRUCTION,
               },
             ],
           },

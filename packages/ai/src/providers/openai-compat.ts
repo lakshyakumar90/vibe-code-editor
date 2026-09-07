@@ -1,4 +1,5 @@
 import type { AiProvider, ChatRequest, InlineRequest } from "../types";
+import { INLINE_FENCE_INSTRUCTION } from "../inline";
 import { sseDataLines, toOpenAIMessages } from "./stream";
 
 /** Shared OpenAI-compatible chat-completions client (OpenAI + Groq). */
@@ -116,7 +117,7 @@ export abstract class OpenAICompatProvider implements AiProvider {
       [
         {
           role: "system",
-          content: "You are a code completion engine. Return only the code that continues the snippet — no explanations, no fences.",
+          content: INLINE_FENCE_INSTRUCTION,
         },
         {
           role: "user",

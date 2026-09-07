@@ -9,6 +9,9 @@ export interface CompletionRequest {
   prefix: string;
   suffix?: string;
   signal?: AbortSignal;
+  /** Phase E: per-request inline provider/model (server falls back when omitted). */
+  provider?: string;
+  model?: string;
 }
 
 /**
@@ -27,6 +30,8 @@ export async function fetchCompletion(req: CompletionRequest): Promise<string> {
       cursor: req.cursor,
       prefix: req.prefix,
       suffix: req.suffix ?? "",
+      ...(req.provider ? { provider: req.provider } : {}),
+      ...(req.model ? { model: req.model } : {}),
     }),
     signal: req.signal,
   });

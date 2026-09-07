@@ -31,6 +31,9 @@ export interface TokenEventData {
 export interface StatusEventData {
   status: string;
   message?: string;
+  /** Present on toolLoop() activity events: which tool ran, with what args. */
+  tool?: string;
+  args?: Record<string, unknown>;
 }
 
 export interface ChangeSetEventData {

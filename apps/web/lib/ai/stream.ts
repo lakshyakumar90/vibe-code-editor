@@ -33,9 +33,11 @@ export async function readSSEStream(
         break;
       }
       case "status": {
-        const s = (parsed.data as { message?: unknown; status?: unknown }).message ??
-          (parsed.data as { status?: unknown }).status;
-        if (typeof s === "string") events.onStatus(s);
+        const d = parsed.data as { message?: unknown; status?: unknown; tool?: unknown; args?: unknown };
+        const s = d.message ?? d.status;
+        const tool = typeof d.tool === "string" ? d.tool : undefined;
+        const args = d.args && typeof d.args === "object" ? (d.args as Record<string, unknown>) : undefined;
+        if (typeof s === "string") events.onStatus(s, tool ? { name: tool, args: args ?? {} } : undefined);
         break;
       }
       case "plan": {

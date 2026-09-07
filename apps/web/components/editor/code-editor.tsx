@@ -1,12 +1,13 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { useTheme } from "next-themes";
 import type { ProjectFile } from "@/types/file";
 import { getLanguage } from "@/lib/file-icons";
 import { fetchCompletion } from "@/lib/ai/completion";
+import { readInlineSettings } from "./inline-settings";
 import {
   ensureModel,
   removeModelByPath,
@@ -18,7 +19,9 @@ import {
 /** Languages with ghost-text providers registered (see handleMount). */
 const COMPLETION_LANGUAGES = [
   "typescript",
+  "typescriptreact",
   "javascript",
+  "javascriptreact",
   "json",
   "css",
   "scss",
@@ -27,16 +30,24 @@ const COMPLETION_LANGUAGES = [
   "plaintext",
 ];
 
-/** Debounce before requesting a completion after typing stops. */
-const COMPLETION_DEBOUNCE_MS = 700;
 /** Max chars sent as prefix/suffix context. */
 const COMPLETION_PREFIX_CHARS = 4000;
 const COMPLETION_SUFFIX_CHARS = 2000;
 
-interface CachedCompletion {
+/** localStorage flag enabling the inline-request debug overlay. */
+const INLINE_DEBUG_KEY = "inline-debug";
+
+/** Last inline request, rendered in the debug overlay when enabled. */
+interface InlineDebugInfo {
+  filePath: string;
+  language: string;
   line: number;
   column: number;
-  text: string;
+  prefixTail: string;
+  suffixHead: string;
+  status: string;
+  chars: number;
+  ms: number;
 }
 
 export interface AskAISelection {
@@ -87,11 +98,11 @@ export function CodeEditor({
   fileRef.current = file;
   const inlineEnabledRef = useRef(inlineEnabled);
   inlineEnabledRef.current = inlineEnabled;
-  const completionCacheRef = useRef<CachedCompletion | null>(null);
-  const completionAbortRef = useRef<AbortController | null>(null);
-  const completionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const completionProvidersRef = useRef<Array<{ dispose(): void }>>([]);
-  const completionListenerRef = useRef<{ dispose(): void } | null>(null);
+  const [debugInfo, setDebugInfo] = useState<InlineDebugInfo | null>(null);
+  const debugEnabled =
+    typeof window !== "undefined" &&
+    window.localStorage.getItem(INLINE_DEBUG_KEY) === "1";
 
   const editorRef =
     useRef<import("monaco-editor").editor.IStandaloneCodeEditor | null>(null);
@@ -151,51 +162,73 @@ export function CodeEditor({
       },
     });
 
-    // Ghost-text inline completions: fetch debounced, render natively.
-    const requestCompletion = () => {
-      if (!inlineEnabledRef.current || reviewingRef.current) return;
-      const ed = editorRef.current;
+    // Ghost-text inline completions: direct async provider. Monaco invokes
+    // this per pause-in-typing and passes a CancellationToken — the fetch
+    // runs for the live position/context and aborts when superseded. No
+    // pre-fetch, no cursor-match cache.
+    const fetchForPosition = async (
+      textModel: Monaco.editor.ITextModel,
+      position: Monaco.Position,
+      token: Monaco.CancellationToken,
+    ): Promise<{ text: string; debug: InlineDebugInfo } | null> => {
       const currentFile = fileRef.current;
-      if (!ed || !currentFile || currentFile.isFolder) return;
-      const model = ed.getModel();
-      const position = ed.getPosition();
-      if (!model || !position) return;
-      if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
-      completionAbortRef.current?.abort();
-      const line = position.lineNumber;
-      const column = position.column;
-      completionTimerRef.current = setTimeout(() => {
-        void (async () => {
-          try {
-            const full = model.getValue();
-            if (full.length > 200_000) return;
-            const offset = model.getOffsetAt({ lineNumber: line, column });
-            // Skip if the cursor moved on while waiting.
-            const now = ed.getPosition();
-            if (!now || now.lineNumber !== line || now.column !== column) return;
-            const aborter = new AbortController();
-            completionAbortRef.current = aborter;
-            const text = await fetchCompletion({
-              projectId: projectIdRef.current,
-              filePath: activePathRef.current ?? currentFile.path,
-              language: getLanguage(currentFile.name),
-              cursor: { line, column, offset },
-              prefix: full.slice(Math.max(0, offset - COMPLETION_PREFIX_CHARS), offset),
-              suffix: full.slice(offset, offset + COMPLETION_SUFFIX_CHARS),
-              signal: aborter.signal,
-            });
-            if (!text.trim()) {
-              completionCacheRef.current = null;
-              return;
-            }
-            completionCacheRef.current = { line, column, text };
-            ed.trigger("ai.complete", "editor.action.inlineSuggest.trigger", null);
-          } catch {
-            // Aborts and backend errors silently clear the pending suggestion.
-            completionCacheRef.current = null;
-          }
-        })();
-      }, COMPLETION_DEBOUNCE_MS);
+      if (!inlineEnabledRef.current || reviewingRef.current) return null;
+      if (!currentFile || currentFile.isFolder) return null;
+      const started = Date.now();
+      const full = textModel.getValue();
+      if (full.length > 200_000) return null;
+      const offset = textModel.getOffsetAt(position);
+      const language = getLanguage(currentFile.name);
+      const prefix = full.slice(Math.max(0, offset - COMPLETION_PREFIX_CHARS), offset);
+      const suffix = full.slice(offset, offset + COMPLETION_SUFFIX_CHARS);
+      const baseDebug = {
+        filePath: activePathRef.current ?? currentFile.path,
+        language,
+        line: position.lineNumber,
+        column: position.column,
+        prefixTail: prefix.slice(-160),
+        suffixHead: suffix.slice(0, 120),
+        chars: 0,
+        ms: 0,
+      };
+      console.debug("[inline]", baseDebug);
+      const aborter = new AbortController();
+      const cancelListener = token.onCancellationRequested(() => aborter.abort());
+      // Phase E: inline provider/model from settings (independent of chat).
+      const inline = readInlineSettings();
+      try {
+        const text = await fetchCompletion({
+          projectId: projectIdRef.current,
+          filePath: activePathRef.current ?? currentFile.path,
+          language,
+          cursor: { line: position.lineNumber, column: position.column, offset },
+          prefix,
+          suffix,
+          signal: aborter.signal,
+          provider: inline.provider,
+          model: inline.model,
+        });
+        const ms = Date.now() - started;
+        if (!text.trim()) {
+          const debug = { ...baseDebug, status: "empty", ms };
+          setDebugInfo(debug);
+          console.debug("[inline] empty", { ms });
+          return null;
+        }
+        const debug = { ...baseDebug, status: "ok", chars: text.length, ms };
+        setDebugInfo(debug);
+        console.debug("[inline] ok", { chars: text.length, ms });
+        return { text, debug };
+      } catch (err) {
+        const ms = Date.now() - started;
+        const aborted = aborter.signal.aborted;
+        const debug = { ...baseDebug, status: aborted ? "aborted" : `error: ${err instanceof Error ? err.message : "unknown"}`, ms };
+        setDebugInfo(debug);
+        console.debug("[inline] failed", debug);
+        return null;
+      } finally {
+        cancelListener.dispose();
+      }
     };
 
     // Dispose stale providers (Editor remounts around DiffEditor review).
@@ -207,34 +240,32 @@ export function CodeEditor({
       }
     }
     completionProvidersRef.current = [];
-    completionCacheRef.current = null;
     for (const language of COMPLETION_LANGUAGES) {
       try {
         completionProvidersRef.current.push(
           monaco.languages.registerInlineCompletionsProvider(language, {
-            provideInlineCompletions(
-              model: Monaco.editor.ITextModel,
+            async provideInlineCompletions(
+              textModel: Monaco.editor.ITextModel,
               position: Monaco.Position,
+              _context: Monaco.languages.InlineCompletionContext,
+              token: Monaco.CancellationToken,
             ) {
-              void model;
-              const cached = completionCacheRef.current;
-              if (
-                !inlineEnabledRef.current ||
-                !cached ||
-                cached.line !== position.lineNumber ||
-                cached.column !== position.column
-              ) {
+              if (!inlineEnabledRef.current || reviewingRef.current) {
+                return { items: [] };
+              }
+              const result = await fetchForPosition(textModel, position, token);
+              if (!result || token.isCancellationRequested) {
                 return { items: [] };
               }
               return {
                 items: [
                   {
-                    insertText: cached.text,
+                    insertText: result.text,
                     range: new monaco.Range(
-                      cached.line,
-                      cached.column,
-                      cached.line,
-                      cached.column,
+                      position.lineNumber,
+                      position.column,
+                      position.lineNumber,
+                      position.column,
                     ),
                   },
                 ],
@@ -248,18 +279,8 @@ export function CodeEditor({
       }
     }
 
-    try {
-      completionListenerRef.current?.dispose();
-    } catch {
-      // already disposed
-    }
-    completionListenerRef.current = editor.onDidChangeModelContent(() => {
-      completionCacheRef.current = null;
-      requestCompletion();
-    });
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Space, () => {
-      completionCacheRef.current = null;
-      requestCompletion();
+      editor.trigger("ai.complete", "editor.action.inlineSuggest.trigger", null);
     });
     editor.focus();
   };
@@ -316,13 +337,6 @@ export function CodeEditor({
   // the Editor instance and its providers persist across tabs).
   useEffect(() => {
     return () => {
-      if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
-      completionAbortRef.current?.abort();
-      try {
-        completionListenerRef.current?.dispose();
-      } catch {
-        // already disposed
-      }
       for (const d of completionProvidersRef.current) {
         try {
           d.dispose();
@@ -371,7 +385,7 @@ export function CodeEditor({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1">
         <Editor
           height="100%"
           theme={monacoTheme}
@@ -413,6 +427,25 @@ export function CodeEditor({
             codeLens: false,
           }}
         />
+        {debugEnabled && debugInfo && (
+          <details
+            open
+            className="absolute bottom-2 right-2 z-10 max-w-[420px] rounded-md border bg-popover/95 p-2 text-[11px] shadow-md backdrop-blur"
+          >
+            <summary className="cursor-pointer font-medium">
+              inline: {debugInfo.status} ({debugInfo.ms}ms)
+            </summary>
+            <div className="mt-1 space-y-1 font-mono leading-relaxed text-muted-foreground">
+              <div>
+                {debugInfo.filePath} · {debugInfo.language} · {debugInfo.line}:{debugInfo.column}
+                {debugInfo.chars > 0 && ` · +${debugInfo.chars} chars`}
+              </div>
+              <div className="whitespace-pre-wrap break-all border-t pt-1">
+                …{debugInfo.prefixTail}▌{debugInfo.suffixHead}…
+              </div>
+            </div>
+          </details>
+        )}
       </div>
     </div>
   );

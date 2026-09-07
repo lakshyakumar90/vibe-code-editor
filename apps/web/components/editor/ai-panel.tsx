@@ -31,6 +31,7 @@ import type {
   AttachableFile,
   AttachmentChip,
   PanelMessage,
+  ToolStep,
 } from "@/lib/ai/types";
 
 const MODE_META: Record<AiPanelMode, { label: string; hint: string }> = {
@@ -53,6 +54,8 @@ function nextId(prefix: string): string {
 function stripAgentBlocks(content: string): string {
   return content
     .replace(/```(?:tool|changeset|plan)\s*\n[\s\S]*?```/g, "")
+    .replace(/<think>[\s\S]*?(<\/think>|$)/gi, "")
+    .replace(/<\/think>/gi, "")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -111,8 +114,57 @@ function AssistantMarkdown({ content }: { content: string }) {
   );
 }
 
-function PlanChecklist({ plan }: { plan: PlanTask[] }) {
+/**
+ * Persistent tool-activity timeline (Cursor-style). Each toolLoop() step
+ * stays visible after the model moves on; rows expand individually to
+ * show tool name, args, and timestamp.
+ */
+function ToolTimeline({ steps }: { steps: ToolStep[] }) {
+  const [open, setOpen] = useState<Set<number>>(new Set());
+  const toggle = (i: number) =>
+    setOpen((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
   return (
+    <ul className="space-y-1">
+      {steps.map((step, i) => {
+        const expanded = open.has(i);
+        return (
+          <li key={`${step.timestamp}-${i}`} className="rounded-md border bg-muted/30">
+            <button
+              onClick={() => toggle(i)}
+              aria-expanded={expanded}
+              className="flex w-full items-center gap-1.5 px-2 py-1 text-left text-xs text-muted-foreground hover:text-foreground"
+              title={`${step.tool} at ${step.timestamp}`}
+            >
+              <ChevronDown
+                className={`size-3 shrink-0 transition-transform ${expanded ? "" : "-rotate-90"}`}
+              />
+              <Check className="size-3 shrink-0 text-green-500" />
+              <span className="truncate">{step.resultSummary}</span>
+            </button>
+            {expanded && (
+              <div className="border-t px-2 py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                <div>
+                  <span className="font-semibold text-foreground">{step.tool}</span>
+                  {Object.keys(step.args).length > 0 && (
+                    <span> {JSON.stringify(step.args)}</span>
+                  )}
+                </div>
+                <div>{new Date(step.timestamp).toLocaleTimeString()}</div>
+              </div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function PlanChecklist({ plan }: { plan: PlanTask[] }) {  return (
     <ul className="mt-2 space-y-1.5">
       {plan.map((task, i) => (
         <li key={i} className="flex items-start gap-2 text-xs">
@@ -306,7 +358,26 @@ export function AIPanel({
             ),
           );
         },
-        onStatus: (text) => setStatus(text),
+        onStatus: (text, tool) => {
+          setStatus(text);
+          // Tool activity appends a persistent timeline entry on the
+          // streaming message — never overwrites previous steps.
+          if (tool) {
+            const step = {
+              tool: tool.name,
+              args: tool.args,
+              resultSummary: text,
+              timestamp: new Date().toISOString(),
+            };
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === assistantId
+                  ? { ...m, steps: [...(m.steps ?? []), step] }
+                  : m,
+              ),
+            );
+          }
+        },
         onPlan: (plan) => {
           setMessages((prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, plan } : m)),
@@ -381,6 +452,9 @@ export function AIPanel({
                       <span>{m.streaming ? (status ?? "Thinking…") : MODE_META[m.mode].label}</span>
                       {m.streaming && <Loader2 className="size-3 animate-spin" />}
                     </div>
+                  )}
+                  {m.steps && m.steps.length > 0 && (
+                    <ToolTimeline steps={m.steps} />
                   )}
                   {stripAgentBlocks(m.content) !== "" && (
                     <div className="text-[13px] leading-relaxed">

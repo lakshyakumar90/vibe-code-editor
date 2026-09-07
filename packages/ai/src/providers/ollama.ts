@@ -1,4 +1,5 @@
 import type { AiProvider, ChatRequest, InlineRequest } from "../types";
+import { INLINE_FENCE_INSTRUCTION } from "../inline";
 import { ndjsonLines } from "./stream";
 
 /** Local Ollama (NDJSON streaming via /api/chat). */
@@ -66,8 +67,7 @@ export class OllamaProvider implements AiProvider {
         messages: [
           {
             role: "system",
-            content:
-              "You are a code completion engine. Return only the code that continues the snippet — no explanations, no fences.",
+            content: INLINE_FENCE_INSTRUCTION,
           },
           {
             role: "user",
