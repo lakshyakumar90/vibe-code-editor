@@ -298,10 +298,22 @@ export const aiController = {
       if (err instanceof Error && (err.name === "AbortError" || abortController.signal.aborted)) {
         return res.status(499).json({ success: false, code: "ABORTED", message: "Request aborted" });
       }
+      const message = err instanceof Error ? err.message : "Unknown error";
+      // Preserve provider rate/budget semantics: our providers embed the
+      // upstream status ("failed (429)") in the message. A 429 is retryable
+      // and must not masquerade as a 500 INTERNAL_ERROR.
+      if (/failed \((429|5\d\d)\)|rate.?limit|quota|too large/i.test(message)) {
+        const status = /failed \(429\)|rate.?limit|quota|too large/i.test(message) ? 429 : 502;
+        return res.status(status).json({
+          success: false,
+          code: status === 429 ? "PROVIDER_RATE_LIMITED" : "PROVIDER_UNAVAILABLE",
+          message,
+        });
+      }
       return res.status(500).json({
         success: false,
         code: "INTERNAL_ERROR",
-        message: err instanceof Error ? err.message : "Unknown error",
+        message,
       });
     } finally {
       req.off?.("close", onClose);

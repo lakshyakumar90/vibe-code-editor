@@ -1,5 +1,5 @@
 import type { AiProvider, ChatRequest, InlineRequest } from "../types";
-import { INLINE_FENCE_INSTRUCTION } from "../inline";
+import { INLINE_FENCE_INSTRUCTION, INLINE_MAX_TOKENS } from "../inline";
 import { sseDataLines, toOpenAIMessages } from "./stream";
 
 /** Shared OpenAI-compatible chat-completions client (OpenAI + Groq). */
@@ -69,6 +69,10 @@ export async function completeChatCompletions(
       model,
       messages: toOpenAIMessages(messages),
       stream: false,
+      // Inline-only cap (this helper serves completeInline exclusively):
+      // keeps Groq on_demand OTPM enforcement happy. Streaming chat
+      // (agent/plan/ask) sets no cap.
+      max_tokens: INLINE_MAX_TOKENS,
       ...(temperature !== undefined ? { temperature } : {}),
     }),
     signal,

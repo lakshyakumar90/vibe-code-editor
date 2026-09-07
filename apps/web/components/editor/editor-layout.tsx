@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState, useRef } from "react";
+import { DiffEditor } from "@monaco-editor/react";
+import { useTheme } from "next-themes";
 import type { ProjectFile } from "@/types/file";
 import { FileTree } from "./file-tree";
 import { CodeEditor } from "./code-editor";
 import { api } from "@/lib/api";
 import { getUniqueName, getPasteParentId, collectDescendants } from "@/lib/file-utils";
-import { getFileIcon } from "@/lib/file-icons";
+import { getFileIcon, getLanguage } from "@/lib/file-icons";
 import { createWorkspace, type VirtualWorkspace } from "@/lib/workspace/workspace";
 import { buildPathToId } from "@/lib/workspace/file-map";
 import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
@@ -276,6 +278,10 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     diffs: FileDiff[];
   } | null>(null);
   const [reviewBusy, setReviewBusy] = useState(false);
+  // Proposed NEW file (no DB record yet) open in the diff preview pane.
+  const [previewPath, setPreviewPath] = useState<string | null>(null);
+  const { resolvedTheme } = useTheme();
+  const monacoTheme = resolvedTheme === "dark" ? "vs-dark" : "vs";
 
   const handleChangesetReady = useCallback(async (changeSetId: string) => {
     setReviewBusy(true);
@@ -319,7 +325,8 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
           await containerWrite(path, diff.newContent);
         }
       }
-      // DB is authoritative after apply — drop stale dirty state first.
+      // Drop stale dirty state first, then refresh once from DB truth
+      // and return it so callers can open newly created files.
       const ids = new Set(
         filesRef.current
           .filter((f) => !f.isFolder && applied.includes(f.path))
@@ -332,7 +339,9 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
         });
         return next;
       });
-      await refresh({ silent: true });
+      // truth so callers can open newly created files.
+      const arr = await refresh({ silent: true });
+      return arr;
     },
     [containerWrite, containerRemove, refresh, runtime],
   );
@@ -343,9 +352,10 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       setReviewBusy(true);
       try {
         const res = await applyChangeSet(pendingReview.changeSetId, paths);
-        await syncAppliedFiles(res.files, pendingReview.diffs);
+        const fresh = await syncAppliedFiles(res.files, pendingReview.diffs);
         if (res.status === "applied") {
           setPendingReview(null);
+          setPreviewPath(null);
           toast.success(
             res.files.length === 1 ? "Applied 1 file" : `Applied ${res.files.length} files`,
           );
@@ -356,7 +366,20 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
               ? { ...prev, diffs: prev.diffs.filter((d) => remaining.has(d.path)) }
               : prev,
           );
+          setPreviewPath((prev) => (prev && remaining.has(prev) ? prev : null));
           toast.success(`Applied ${res.files.length} files (${res.remaining.length} remaining)`);
+        }
+        // Newly created files now exist — open the previewed one (or the
+        // first created) so it shows in the UI immediately.
+        const targetPath =
+          (previewPath && res.files.includes(previewPath) && previewPath) ??
+          res.files.find((p) => !openFiles.some((f) => f.path === p));
+        if (targetPath) {
+          const created = fresh.find((f) => !f.isFolder && f.path === targetPath);
+          if (created) {
+            setPreviewPath(null);
+            handleOpenFile(created);
+          }
         }
       } catch (e) {
         toast.error(e instanceof Error ? e.message : "Failed to apply");
@@ -364,7 +387,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
         setReviewBusy(false);
       }
     },
-    [pendingReview, syncAppliedFiles],
+    [pendingReview, syncAppliedFiles, previewPath, openFiles, handleOpenFile],
   );
 
   const handleRejectFiles = useCallback(
@@ -375,6 +398,9 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
         const res = await rejectChangeSet(pendingReview.changeSetId, paths);
         if (res.status === "rejected") {
           setPendingReview(null);
+          // Rejected proposals vanish — nothing was ever created, so
+          // there is nothing to undo beyond dropping the preview.
+          setPreviewPath(null);
           toast.success("Changeset rejected");
         } else {
           const remaining = new Set(res.remaining ?? []);
@@ -383,6 +409,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
               ? { ...prev, diffs: prev.diffs.filter((d) => remaining.has(d.path)) }
               : prev,
           );
+          setPreviewPath((prev) => (prev && remaining.has(prev) ? prev : null));
           toast.success("Files rejected");
         }
       } catch (e) {
@@ -401,11 +428,18 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
         return;
       }
       const target = filesRef.current.find((f) => !f.isFolder && f.path === diff.path);
-      if (!target) {
-        toast.info("Accept this file to create it");
+      if (target) {
+        setPreviewPath(null);
+        handleOpenFile(target);
         return;
       }
-      handleOpenFile(target);
+      if (!diff.deleted && diff.newContent !== null) {
+        // Proposed new file: no DB record yet — show empty → content
+        // in the diff preview pane instead of blocking with a toast.
+        setPreviewPath(diff.path);
+        return;
+      }
+      toast.info("Nothing to preview for this entry");
     },
     [handleOpenFile],
   );
@@ -1159,7 +1193,71 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
           </div>
         )}
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {activeFile ? (
+          {(() => {
+            // Proposed-new-file preview: no DB record yet, so render the
+            // diff directly (empty → proposed content) with Accept/Reject.
+            const previewDiff =
+              previewPath && !openFiles.some((f) => f.path === previewPath)
+                ? (pendingReview?.diffs.find(
+                    (d) =>
+                      d.path === previewPath && !d.deleted && d.newContent !== null && !d.isFolder,
+                  ) ?? null)
+                : null;
+            if (previewDiff) {
+              return (
+                <div className="flex h-full flex-col">
+                  <div className="flex h-8 shrink-0 items-center justify-between gap-3 border-b bg-muted/30 px-4 text-xs">
+                    <span className="truncate text-muted-foreground">
+                      Previewing proposed file{" "}
+                      <span className="font-medium text-foreground">{previewDiff.path}</span>
+                    </span>
+                    <div className="flex shrink-0 items-center gap-1.5">
+                      <button
+                        onClick={() => handleAcceptFiles([previewDiff.path])}
+                        disabled={reviewBusy}
+                        className="rounded bg-primary px-2.5 py-1 text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                      >
+                        Accept & create
+                      </button>
+                      <button
+                        onClick={() => handleRejectFiles([previewDiff.path])}
+                        disabled={reviewBusy}
+                        className="rounded border px-2.5 py-1 hover:bg-accent disabled:opacity-50"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        onClick={() => setPreviewPath(null)}
+                        className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                        title="Close preview"
+                        aria-label="Close preview"
+                      >
+                        <X className="size-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    <DiffEditor
+                      height="100%"
+                      theme={monacoTheme}
+                      language={getLanguage(previewDiff.path.split("/").pop() ?? previewDiff.path)}
+                      original=""
+                      modified={previewDiff.newContent ?? ""}
+                      options={{
+                        automaticLayout: true,
+                        minimap: { enabled: false },
+                        fontSize: 14,
+                        readOnly: true,
+                        renderSideBySide: false,
+                        scrollBeyondLastLine: false,
+                        wordWrap: "on",
+                      }}
+                    />
+                  </div>
+                </div>
+              );
+            }
+            return activeFile ? (
             <CodeEditor
               projectId={projectId}
               file={activeFile}
@@ -1175,7 +1273,8 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
             />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a file to begin editing.</div>
-          )}
+          );
+          })()}
         </div>
         <BottomPanel />
         </>

@@ -3,8 +3,6 @@
 import { useState } from "react";
 import { Settings2 } from "lucide-react";
 import {
-  DEFAULT_MODEL,
-  DEFAULT_PROVIDER,
   PROVIDER_MODELS,
   SUPPORTED_PROVIDERS,
   type AiProviderId,
@@ -13,6 +11,15 @@ import {
 export const INLINE_PROVIDER_KEY = "inlineCompletionProvider";
 export const INLINE_MODEL_KEY = "inlineCompletionModel";
 
+/**
+ * Inline defaults are deliberately separate from chat defaults: ghost
+ * text needs ~1s latency, which local Ollama rarely delivers on CPU.
+ * Cloud default first; the fetch layer falls back to the server default
+ * chain when the provider isn't configured.
+ */
+export const INLINE_DEFAULT_PROVIDER: AiProviderId = "groq";
+export const INLINE_DEFAULT_MODEL = "openai/gpt-oss-20b";
+
 function isProviderId(v: string): v is AiProviderId {
   return (Object.keys(PROVIDER_MODELS) as string[]).includes(v);
 }
@@ -20,19 +27,19 @@ function isProviderId(v: string): v is AiProviderId {
 /** Stored inline provider/model, validated against the registry. */
 export function readInlineSettings(): { provider: string; model: string } {
   if (typeof window === "undefined") {
-    return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
+    return { provider: INLINE_DEFAULT_PROVIDER, model: INLINE_DEFAULT_MODEL };
   }
   try {
     const rawProvider = window.localStorage.getItem(INLINE_PROVIDER_KEY);
     const provider: AiProviderId =
-      rawProvider && isProviderId(rawProvider) ? rawProvider : DEFAULT_PROVIDER;
+      rawProvider && isProviderId(rawProvider) ? rawProvider : INLINE_DEFAULT_PROVIDER;
     const models = PROVIDER_MODELS[provider];
     const rawModel = window.localStorage.getItem(INLINE_MODEL_KEY);
     const model =
-      rawModel && models.includes(rawModel) ? rawModel : models[0] ?? DEFAULT_MODEL;
+      rawModel && models.includes(rawModel) ? rawModel : models[0] ?? INLINE_DEFAULT_MODEL;
     return { provider, model };
   } catch {
-    return { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
+    return { provider: INLINE_DEFAULT_PROVIDER, model: INLINE_DEFAULT_MODEL };
   }
 }
 
@@ -56,7 +63,7 @@ export function InlineSettingsButton() {
   };
 
   const onProviderChange = (pid: AiProviderId) => {
-    const m = PROVIDER_MODELS[pid][0] ?? DEFAULT_MODEL;
+    const m = PROVIDER_MODELS[pid][0] ?? INLINE_DEFAULT_MODEL;
     setProvider(pid);
     setModel(m);
     persist(pid, m);

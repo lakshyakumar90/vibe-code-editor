@@ -20,6 +20,15 @@ export const INLINE_FENCE_INSTRUCTION =
 /** Max chars accepted for unfenced raw output (longer => rambling prose). */
 export const MAX_RAW_INLINE_CHARS = 400;
 
+/**
+ * Explicit output cap for inline completions (ghost text needs little).
+ * Groq's on_demand tier enforces OTPM ceilings (~1000) against its
+ * estimate when max_tokens is unset — an explicit cap well under the
+ * ceiling keeps /complete accepted. Agent/plan streaming paths set no
+ * cap and are unaffected.
+ */
+export const INLINE_MAX_TOKENS = 800;
+
 export function cleanInlineCompletion(raw: string, suffix: string): string {
   const noThink = raw
     .replace(/\r/g, "")
@@ -30,10 +39,11 @@ export function cleanInlineCompletion(raw: string, suffix: string): string {
   if (fence?.[1] !== undefined) {
     text = fence[1].replace(/\s+$/, "");
   } else {
-    // Drop leading blank lines + trailing whitespace, but preserve the
-    // first line's indentation (ghost text inserts at the live cursor).
     text = noThink.replace(/^\n+/, "").replace(/\s+$/, "");
     if (text.length > MAX_RAW_INLINE_CHARS) return "";
+    // Leftover fence markers mean a malformed fence attempt (e.g. gemini
+    // emitting "cons ```t``````t```") — not renderable code, suppress.
+    if (text.includes("```")) return "";
     // Unfenced prose (explanations, thinking leftovers): a line with 6+
     // words ending in sentence punctuation is not code. Showing nothing
     // beats ghosting an explanation. (Fenced blocks skip this — the model

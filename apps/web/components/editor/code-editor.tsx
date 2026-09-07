@@ -33,6 +33,12 @@ const COMPLETION_LANGUAGES = [
 /** Max chars sent as prefix/suffix context. */
 const COMPLETION_PREFIX_CHARS = 4000;
 const COMPLETION_SUFFIX_CHARS = 2000;
+/** Pause after last keystroke before auto-triggered fetch (Explicit/Ctrl+Space skips this). */
+const INLINE_DEBOUNCE_MS = 450;
+/** Quiet period after a provider 429 before new requests go out. */
+const RATE_LIMIT_COOLDOWN_MS = 20_000;
+/** Module-level: shared across mounts so keystroke storms can't hammer a limited provider. */
+let inlineRateLimitedUntil = 0;
 
 /** localStorage flag enabling the inline-request debug overlay. */
 const INLINE_DEBUG_KEY = "inline-debug";
@@ -48,6 +54,7 @@ interface InlineDebugInfo {
   status: string;
   chars: number;
   ms: number;
+  via: string;
 }
 
 export interface AskAISelection {
@@ -191,13 +198,27 @@ export function CodeEditor({
         chars: 0,
         ms: 0,
       };
-      console.debug("[inline]", baseDebug);
-      const aborter = new AbortController();
-      const cancelListener = token.onCancellationRequested(() => aborter.abort());
+      // 429 breaker: while cooling down, don't even send requests.
+      if (Date.now() < inlineRateLimitedUntil) {
+        const debug = {
+          ...baseDebug,
+          status: `cooldown (${Math.ceil((inlineRateLimitedUntil - Date.now()) / 1000)}s)`,
+          ms: 0,
+          via: "—",
+        };
+        setDebugInfo(debug);
+        return null;
+      }
       // Phase E: inline provider/model from settings (independent of chat).
       const inline = readInlineSettings();
-      try {
-        const text = await fetchCompletion({
+      let via = `${inline.provider}/${inline.model}`;
+      console.debug("[inline]", { ...baseDebug, via });
+      const aborter = new AbortController();
+      const cancelListener = token.onCancellationRequested(() => aborter.abort());
+      // Falls back to the server default chain when the configured
+      // provider isn't set up (e.g. missing key) instead of going dark.
+      const attempt = (provider?: string, model?: string) =>
+        fetchCompletion({
           projectId: projectIdRef.current,
           filePath: activePathRef.current ?? currentFile.path,
           language,
@@ -205,24 +226,49 @@ export function CodeEditor({
           prefix,
           suffix,
           signal: aborter.signal,
-          provider: inline.provider,
-          model: inline.model,
+          ...(provider ? { provider, model } : {}),
         });
+      const notConfigured = (err: unknown) =>
+        err instanceof Error &&
+        (/not configured/i.test(err.message) ||
+          (err as Error & { code?: unknown }).code === "PROVIDER_NOT_CONFIGURED");
+      try {
+        let text: string;
+        try {
+          text = await attempt(inline.provider, inline.model);
+        } catch (err) {
+          if (!notConfigured(err) || aborter.signal.aborted) throw err;
+          text = await attempt();
+          via = "server-default";
+        }
         const ms = Date.now() - started;
         if (!text.trim()) {
-          const debug = { ...baseDebug, status: "empty", ms };
+          const debug = { ...baseDebug, status: "empty", ms, via };
           setDebugInfo(debug);
-          console.debug("[inline] empty", { ms });
+          console.debug("[inline] empty", { ms, via });
           return null;
         }
-        const debug = { ...baseDebug, status: "ok", chars: text.length, ms };
+        const debug = { ...baseDebug, status: "ok", chars: text.length, ms, via };
         setDebugInfo(debug);
-        console.debug("[inline] ok", { chars: text.length, ms });
+        console.debug("[inline] ok", { chars: text.length, ms, via });
         return { text, debug };
       } catch (err) {
         const ms = Date.now() - started;
         const aborted = aborter.signal.aborted;
-        const debug = { ...baseDebug, status: aborted ? "aborted" : `error: ${err instanceof Error ? err.message : "unknown"}`, ms };
+        const rateLimited =
+          !aborted &&
+          err instanceof Error &&
+          ((err as Error & { code?: unknown }).code === "PROVIDER_RATE_LIMITED" ||
+            /\(429\)|rate.?limit/i.test(err.message));
+        if (rateLimited) {
+          inlineRateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
+        }
+        const status = aborted
+          ? "aborted"
+          : rateLimited
+            ? "rate-limited, cooling down"
+            : `error: ${err instanceof Error ? err.message : "unknown"}`;
+        const debug = { ...baseDebug, status, ms, via };
         setDebugInfo(debug);
         console.debug("[inline] failed", debug);
         return null;
@@ -247,11 +293,29 @@ export function CodeEditor({
             async provideInlineCompletions(
               textModel: Monaco.editor.ITextModel,
               position: Monaco.Position,
-              _context: Monaco.languages.InlineCompletionContext,
+              context: Monaco.languages.InlineCompletionContext,
               token: Monaco.CancellationToken,
             ) {
               if (!inlineEnabledRef.current || reviewingRef.current) {
                 return { items: [] };
+              }
+              // Collapse keystroke storms: auto-triggered invocations wait
+              // for a typing pause (superseded ones exit during the wait and
+              // never hit the network — this is what "cancelled" was).
+              // Explicit invocations (Ctrl+Space) fetch immediately.
+              const explicitKind =
+                monaco.languages.InlineCompletionTriggerKind?.Explicit ?? 1;
+              if (context.triggerKind !== explicitKind) {
+                const paused = await new Promise<boolean>((resolve) => {
+                  const timer = setTimeout(() => resolve(true), INLINE_DEBOUNCE_MS);
+                  token.onCancellationRequested(() => {
+                    clearTimeout(timer);
+                    resolve(false);
+                  });
+                });
+                if (!paused || token.isCancellationRequested) {
+                  return { items: [] };
+                }
               }
               const result = await fetchForPosition(textModel, position, token);
               if (!result || token.isCancellationRequested) {
@@ -433,7 +497,7 @@ export function CodeEditor({
             className="absolute bottom-2 right-2 z-10 max-w-[420px] rounded-md border bg-popover/95 p-2 text-[11px] shadow-md backdrop-blur"
           >
             <summary className="cursor-pointer font-medium">
-              inline: {debugInfo.status} ({debugInfo.ms}ms)
+              inline: {debugInfo.status} ({debugInfo.ms}ms via {debugInfo.via})
             </summary>
             <div className="mt-1 space-y-1 font-mono leading-relaxed text-muted-foreground">
               <div>

@@ -40,6 +40,7 @@ export {
 export { OpenAIProvider } from "./providers/openai";
 export {
   INLINE_FENCE_INSTRUCTION,
+  INLINE_MAX_TOKENS,
   MAX_RAW_INLINE_CHARS,
   cleanInlineCompletion,
 } from "./inline";export { GroqProvider } from "./providers/groq";
