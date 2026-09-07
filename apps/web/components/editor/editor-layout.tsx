@@ -12,6 +12,7 @@ import { buildPathToId } from "@/lib/workspace/file-map";
 import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import { removeModelByPath } from "@/lib/language/model-manager";
 import { BottomPanel } from "./bottom-panel";
+import { AIPanel } from "./ai-panel";
 import { useRuntime } from "./runtime-provider";
 import { toast } from "sonner";
 import {
@@ -81,6 +82,8 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
   const [deleteTarget, setDeleteTarget] = useState<ProjectFile | null>(null);
   const [closeTarget, setCloseTarget] = useState<ProjectFile | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(288);
+  const [aiWidth, setAiWidth] = useState(340);
+  const [aiCollapsed, setAiCollapsed] = useState(false);
   const [isResizing, setIsResizing] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [leftTab, setLeftTab] = useState<"files" | "search">("files");
@@ -226,15 +229,15 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
   }, []);
 
   // Ask-AI selections captured from the editor (right-click menu).
-  // Passed down as attachment chips; the reveal token focuses the AI tab.
+  // Passed down as attachment chips; the left agent rail expands.
   const [aiAttachments, setAiAttachments] = useState<Attachment[]>([]);
-  const [aiRevealToken, setAiRevealToken] = useState(0);
 
   const handleAskAI = useCallback((selection: AskAISelection) => {
     if (!selection.code.trim()) {
       toast.info("Select some code first");
       return;
     }
+    setAiCollapsed(false);
     setAiAttachments((prev) => {
       if (
         prev.some(
@@ -248,7 +251,6 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
       }
       return [...prev.slice(-9), { ...selection }];
     });
-    setAiRevealToken((t) => t + 1);
   }, []);
 
   const handleAiAttachmentsConsumed = useCallback(() => {
@@ -824,6 +826,68 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
 
   return (
     <div className="flex h-full w-full overflow-hidden">
+      {/* Left agent rail — collapsible, like Bolt */}
+      {!aiCollapsed ? (
+        <>
+          <aside
+            style={{ width: aiWidth }}
+            className="flex shrink-0 flex-col overflow-hidden border-r bg-background"
+          >
+            <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
+              <span className="px-1 text-sm font-bold italic tracking-tight">vibe</span>
+              <span className="flex-1" />
+              <button
+                onClick={() => setAiCollapsed(true)}
+                className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                title="Collapse agent panel"
+              >
+                <PanelLeftClose className="size-4" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1">
+              <AIPanel
+                projectId={projectId}
+                attachables={openFiles
+                  .filter((f) => !f.isFolder)
+                  .map((f) => ({
+                    id: f.id,
+                    path: f.path,
+                    content: editedContents[f.id] ?? f.content ?? "",
+                  }))}
+                externalAttachments={aiAttachments}
+                onExternalConsumed={handleAiAttachmentsConsumed}
+                onChangeset={handleChangesetReady}
+              />
+            </div>
+          </aside>
+          <div
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const startX = e.clientX;
+              const startW = aiWidth;
+              const move = (ev: MouseEvent) =>
+                setAiWidth(Math.min(Math.max(startW + ev.clientX - startX, 260), 560));
+              const up = () => {
+                document.removeEventListener("mousemove", move);
+                document.removeEventListener("mouseup", up);
+              };
+              document.addEventListener("mousemove", move);
+              document.addEventListener("mouseup", up);
+            }}
+            className="w-1 shrink-0 cursor-col-resize transition-colors hover:bg-primary/20"
+          />
+        </>
+      ) : (
+        <div className="flex shrink-0 flex-col items-center gap-1 border-r bg-background py-2">
+          <button
+            onClick={() => setAiCollapsed(false)}
+            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Expand agent panel"
+          >
+            <PanelLeftOpen className="size-4" />
+          </button>
+        </div>
+      )}
       {!sidebarCollapsed && (
         <>
           <aside
@@ -1082,20 +1146,7 @@ export function EditorLayout({ projectId, template = "REACT" }: EditorLayoutProp
             <div className="flex h-full items-center justify-center text-sm text-muted-foreground">Select a file to begin editing.</div>
           )}
         </div>
-        <BottomPanel
-          projectId={projectId}
-          attachables={openFiles
-            .filter((f) => !f.isFolder)
-            .map((f) => ({
-              id: f.id,
-              path: f.path,
-              content: editedContents[f.id] ?? f.content ?? "",
-            }))}
-          aiAttachments={aiAttachments}
-          onAiAttachmentsConsumed={handleAiAttachmentsConsumed}
-          aiRevealToken={aiRevealToken}
-          onChangeset={handleChangesetReady}
-        />
+        <BottomPanel />
       </main>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>

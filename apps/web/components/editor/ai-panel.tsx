@@ -53,7 +53,7 @@ function stripAgentBlocks(content: string): string {
 
 function AssistantMarkdown({ content }: { content: string }) {
   return (
-    <div className="break-words text-xs leading-relaxed">
+    <div className="break-words text-[13px] leading-relaxed">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -154,6 +154,7 @@ export function AIPanel({
   const [status, setStatus] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [attachOpen, setAttachOpen] = useState(false);
+  const [modeOpen, setModeOpen] = useState(false);
   const transportRef = useRef<SseTransport | null>(null);
 
   // Merge Ask-AI selections from the editor into chips (deduped).
@@ -323,55 +324,61 @@ export function AIPanel({
 
   return (
     <div className="flex h-full flex-col bg-background">
-      {/* Messages */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+      {/* Slim status header — mode lives in the composer below */}
+      <div className="flex h-9 shrink-0 items-center gap-1.5 border-b px-3">
+        <span className="flex-1 text-xs text-muted-foreground">
+          {streaming ? (status ?? "Working…") : "Agent"}
+        </span>
+        {streaming && <Loader2 className="size-3 animate-spin text-muted-foreground" />}
+      </div>
+
+      {/* Messages — full-width rows like Bolt */}
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
-            <Bot className="size-6 text-muted-foreground" />
-            <p className="text-xs font-medium text-foreground">
-              Ask AI about your code
-            </p>
-            <p className="max-w-[280px] text-[11px] text-muted-foreground">
+            <div className="text-lg font-bold italic tracking-tight">vibe</div>
+            <p className="text-sm text-muted-foreground">How can Vibe help you today?</p>
+            <p className="max-w-[260px] text-[11px] text-muted-foreground">
               {MODE_META[mode].hint}. Attach files with +, then send.
             </p>
           </div>
         ) : (
-          <div className="space-y-3">
-            {messages.map((m) => (
-              <div
-                key={m.id}
-                className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}
-              >
-                <div
-                  className={`max-w-[85%] rounded-lg px-3 py-2 text-xs ${
-                    m.role === "user"
-                      ? "bg-primary text-primary-foreground"
-                      : "bg-muted/60 text-foreground"
-                  }`}
-                >
-                  {m.role === "assistant" && m.mode && (
-                    <div className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                      {MODE_META[m.mode].label}
-                      {m.streaming ? " • streaming…" : ""}
+          <div className="space-y-4">
+            {messages.map((m) =>
+              m.role === "user" ? (
+                <div key={m.id} className="flex justify-start">
+                  <div className="max-w-[90%] rounded-lg border bg-muted/50 px-3 py-2 text-[13px] leading-relaxed">
+                    <div className="whitespace-pre-wrap break-words">{m.content}</div>
+                  </div>
+                </div>
+              ) : (
+                <div key={m.id} className="space-y-2">
+                  {m.mode && (
+                    <div className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
+                      <Bot className="size-3.5" />
+                      <span>{m.streaming ? (status ?? "Thinking…") : MODE_META[m.mode].label}</span>
+                      {m.streaming && <Loader2 className="size-3 animate-spin" />}
                     </div>
                   )}
-                  {m.content && m.role === "user" && (
-                    <div className="whitespace-pre-wrap break-words">
-                      {m.content}
-                    </div>
-                  )}
-                  {m.role === "assistant" &&
-                    stripAgentBlocks(m.content) !== "" && (
+                  {stripAgentBlocks(m.content) !== "" && (
+                    <div className="text-[13px] leading-relaxed">
                       <AssistantMarkdown content={stripAgentBlocks(m.content)} />
-                    )}
-                  {m.role === "assistant" && m.plan && (
-                    <PlanChecklist plan={m.plan} />
+                      {m.streaming && <span className="ml-0.5 inline-block h-3.5 w-[7px] animate-pulse rounded-[1px] bg-primary align-middle" />}
+                    </div>
                   )}
-                  {m.role === "assistant" && !m.streaming && (
-                    <div className="mt-1.5 flex items-center gap-1 border-t border-border/50 pt-1.5">
+                  {m.plan && (
+                    <div className="rounded-lg border bg-muted/30 px-3 py-2">
+                      <div className="mb-1 flex items-center gap-1.5 text-xs font-medium">
+                        Plan
+                      </div>
+                      <PlanChecklist plan={m.plan} />
+                    </div>
+                  )}
+                  {!m.streaming && (
+                    <div className="flex items-center gap-0.5 text-muted-foreground">
                       <button
                         onClick={() => setFeedback(m.id, "up")}
-                        className={`rounded p-1 hover:bg-accent ${m.feedback === "up" ? "text-green-500" : "text-muted-foreground"}`}
+                        className={`rounded p-1.5 hover:bg-accent hover:text-foreground ${m.feedback === "up" ? "text-green-500" : ""}`}
                         title="Good response"
                         aria-label="Thumbs up"
                       >
@@ -379,7 +386,7 @@ export function AIPanel({
                       </button>
                       <button
                         onClick={() => setFeedback(m.id, "down")}
-                        className={`rounded p-1 hover:bg-accent ${m.feedback === "down" ? "text-red-500" : "text-muted-foreground"}`}
+                        className={`rounded p-1.5 hover:bg-accent hover:text-foreground ${m.feedback === "down" ? "text-red-500" : ""}`}
                         title="Bad response"
                         aria-label="Thumbs down"
                       >
@@ -388,22 +395,18 @@ export function AIPanel({
                     </div>
                   )}
                 </div>
-              </div>
-            ))}
+              ),
+            )}
+            {!streaming && status && (
+              <div className="text-[11px] text-muted-foreground">{status}</div>
+            )}
           </div>
         )}
       </div>
 
-      {/* Status line */}
-      {status && (
-        <div className="shrink-0 border-t px-3 py-1 text-[11px] text-muted-foreground">
-          {status}
-        </div>
-      )}
-
       {/* Attachment chips */}
       {chips.length > 0 && (
-        <div className="flex shrink-0 flex-wrap gap-1.5 border-t px-3 py-1.5">
+        <div className="flex shrink-0 flex-wrap gap-1.5 px-3 pb-1.5">
           {chips.map((chip) => (
             <span
               key={chip.id}
@@ -426,100 +429,132 @@ export function AIPanel({
         </div>
       )}
 
-      {/* Input row */}
-      <div className="relative flex shrink-0 items-end gap-1.5 border-t p-2">
-        <div className="relative shrink-0">
-          <select
-            value={mode}
-            onChange={(e) => setMode(e.target.value as AiPanelMode)}
-            className="h-8 cursor-pointer appearance-none rounded-md border bg-muted/60 pl-2 pr-7 text-xs font-medium outline-none hover:bg-accent"
-            title={MODE_META[mode].hint}
-            aria-label="AI mode"
-          >
-            {(Object.keys(MODE_META) as AiPanelMode[]).map((key) => (
-              <option key={key} value={key} title={MODE_META[key].hint}>
-                {MODE_META[key].label}
-              </option>
-            ))}
-          </select>
-          <ChevronDown className="pointer-events-none absolute right-1.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-        </div>
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              handleSend();
-            }
-          }}
-          placeholder={`Ask (${MODE_META[mode].label} mode)…`}
-          rows={2}
-          className="max-h-24 min-h-8 flex-1 resize-none rounded-md border bg-background px-2.5 py-1.5 text-xs outline-none placeholder:text-muted-foreground focus:border-primary"
-        />
-        <button
-          className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
-          title="Voice input (coming soon)"
-          aria-label="Voice input (coming soon)"
-          onClick={() => setStatus("Voice input is not available yet")}
-        >
-          <Mic className="size-4" />
-        </button>
-        <button
-          className="rounded-md p-2 text-muted-foreground hover:bg-accent hover:text-foreground"
-          title="Attach an open file"
-          aria-label="Attach an open file"
-          onClick={() => setAttachOpen((v) => !v)}
-        >
-          <Plus className="size-4" />
-        </button>
-        {streaming ? (
-          <button
-            onClick={handleStop}
-            className="rounded-md bg-primary p-2 text-primary-foreground hover:bg-primary/90"
-            title="Stop generating"
-            aria-label="Stop generating"
-          >
-            <Square className="size-4" />
-          </button>
-        ) : (
-          <button
-            onClick={handleSend}
-            disabled={!input.trim()}
-            className="rounded-md bg-primary p-2 text-primary-foreground hover:bg-primary/90 disabled:opacity-40"
-            title="Send"
-            aria-label="Send"
-          >
-            <ArrowUp className="size-4" />
-          </button>
-        )}
-        {attachOpen && (
-          <>
-            <div
-              className="fixed inset-0 z-10"
-              onClick={() => setAttachOpen(false)}
-            />
-            <div className="absolute bottom-12 right-2 z-20 max-h-48 w-64 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
-              {attachables.length === 0 ? (
-                <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                  No open files to attach
-                </div>
-              ) : (
-                attachables.map((file) => (
-                  <button
-                    key={file.id}
-                    onClick={() => addFileChip(file)}
-                    className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
-                    title={file.path}
+      {/* Composer — Bolt style box */}
+      <div className="shrink-0 p-3 pt-1">
+        <div className="relative rounded-xl border bg-muted/40 focus-within:border-primary/60">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSend();
+              }
+            }}
+            placeholder="How can Vibe help you today? (or /command)"
+            rows={2}
+            className="max-h-28 min-h-[52px] w-full resize-none bg-transparent px-3 pb-1 pt-2.5 text-[13px] outline-none placeholder:text-muted-foreground"
+          />
+          <div className="flex items-center gap-1 px-2 pb-2">
+            <button
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Attach an open file"
+              aria-label="Attach an open file"
+              onClick={() => setAttachOpen((v) => !v)}
+            >
+              <Plus className="size-4" />
+            </button>
+            <div className="relative">
+              <button
+                onClick={() => setModeOpen((v) => !v)}
+                title={MODE_META[mode].hint}
+                aria-label="Agent mode"
+                aria-haspopup="menu"
+                aria-expanded={modeOpen}
+                className="flex items-center gap-1 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                {MODE_META[mode].label}
+                <ChevronDown className={`size-3 transition-transform ${modeOpen ? "rotate-180" : ""}`} />
+              </button>
+              {modeOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setModeOpen(false)} />
+                  <div
+                    role="menu"
+                    className="absolute bottom-9 left-0 z-20 w-44 overflow-hidden rounded-md border bg-popover p-1 shadow-md"
                   >
-                    <FileCode2 className="size-3.5 shrink-0 text-muted-foreground" />
-                    <span className="truncate">{file.path}</span>
-                  </button>
-                ))
+                    {(Object.keys(MODE_META) as AiPanelMode[]).map((key) => (
+                      <button
+                        key={key}
+                        role="menuitemradio"
+                        aria-checked={mode === key}
+                        onClick={() => {
+                          setMode(key);
+                          setModeOpen(false);
+                        }}
+                        title={MODE_META[key].hint}
+                        className={`flex w-full flex-col gap-0.5 rounded px-2 py-1.5 text-left hover:bg-accent ${
+                          mode === key ? "bg-accent/60" : ""
+                        }`}
+                      >
+                        <span className="text-xs font-medium">{MODE_META[key].label}</span>
+                        <span className="text-[11px] leading-tight text-muted-foreground">
+                          {MODE_META[key].hint}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
-          </>
-        )}
+            <span className="flex-1" />
+            <button
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Voice input (coming soon)"
+              aria-label="Voice input (coming soon)"
+              onClick={() => setStatus("Voice input is not available yet")}
+            >
+              <Mic className="size-4" />
+            </button>
+            {streaming ? (
+              <button
+                onClick={handleStop}
+                className="flex size-7 items-center justify-center rounded-full bg-foreground text-background hover:opacity-90"
+                title="Stop generating"
+                aria-label="Stop generating"
+              >
+                <Square className="size-3.5 fill-current" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSend}
+                disabled={!input.trim()}
+                className="flex size-7 items-center justify-center rounded-full bg-blue-500 text-white hover:bg-blue-600 disabled:opacity-40"
+                title="Send"
+                aria-label="Send"
+              >
+                <ArrowUp className="size-4" />
+              </button>
+            )}
+          </div>
+          {attachOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-10"
+                onClick={() => setAttachOpen(false)}
+              />
+              <div className="absolute bottom-12 left-2 z-20 max-h-48 w-64 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
+                {attachables.length === 0 ? (
+                  <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                    No open files to attach
+                  </div>
+                ) : (
+                  attachables.map((file) => (
+                    <button
+                      key={file.id}
+                      onClick={() => addFileChip(file)}
+                      className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                      title={file.path}
+                    >
+                      <FileCode2 className="size-3.5 shrink-0 text-muted-foreground" />
+                      <span className="truncate">{file.path}</span>
+                    </button>
+                  ))
+                )}
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </div>
   );

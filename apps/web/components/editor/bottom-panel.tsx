@@ -1,8 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
-  Bot,
   ChevronDown,
   ChevronUp,
   Plus,
@@ -11,12 +10,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "next-themes";
 import { TerminalInstance } from "./terminal-panel";
-import { AIPanel } from "./ai-panel";
 import { BOOT_TERMINAL_ID, useRuntime } from "./runtime-provider";
-import type { AttachableFile } from "@/lib/ai/types";
-import type { Attachment } from "@repo/ai";
-
-const AI_TAB_ID = "ai";
 
 interface TermTab {
   id: string;
@@ -42,24 +36,7 @@ let termCounter = 1;
  * The pinned AI tab hosts the assistant panel (Ask/Plan/Agent). It stays
  * mounted while hidden so chat state survives tab switches.
  */
-export function BottomPanel({
-  projectId,
-  attachables,
-  aiAttachments,
-  onAiAttachmentsConsumed,
-  aiRevealToken,
-  onChangeset,
-}: {
-  projectId: string;
-  attachables: AttachableFile[];
-  /** Ask-AI selections from the editor (consumed into chips). */
-  aiAttachments: Attachment[];
-  onAiAttachmentsConsumed: () => void;
-  /** Bumped to focus the AI tab (e.g. after Ask-AI). */
-  aiRevealToken: number;
-  /** Agent-mode changeset ready → layout fetches diffs for review. */
-  onChangeset: (changeSetId: string) => void;
-}) {
+export function BottomPanel() {
   const { logs, status } = useRuntime();
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme === "dark";
@@ -107,15 +84,12 @@ export function BottomPanel({
     }
   }, [status]);
 
-  // Ask-AI from the editor focuses the AI tab (skips the initial 0).
-  const revealSeenRef = useRef(aiRevealToken);
+  // Keep active valid when closing tabs.
   useEffect(() => {
-    if (aiRevealToken !== revealSeenRef.current) {
-      revealSeenRef.current = aiRevealToken;
-      setActive(AI_TAB_ID);
-      setCollapsed(false);
+    if (terminals.length > 0 && !terminals.some((t) => t.id === active)) {
+      setActive(terminals[0]!.id);
     }
-  }, [aiRevealToken]);
+  }, [terminals, active]);
 
   const running = status === "ready";
   const busy =
@@ -133,17 +107,6 @@ export function BottomPanel({
     <div className="shrink-0 border-t bg-background">
       {/* Tab bar */}
       <div className="flex h-9 items-stretch overflow-x-auto border-b bg-muted/40">
-        <button
-          onClick={() => {
-            setActive(AI_TAB_ID);
-            setCollapsed(false);
-          }}
-          className={tabBtn(active === AI_TAB_ID)}
-          title="AI assistant (Ask / Plan / Agent)"
-        >
-          <Bot className="size-3.5" />
-          <span>AI</span>
-        </button>
         {terminals.map((t) => (
           <button
             key={t.id}
@@ -213,17 +176,7 @@ export function BottomPanel({
       {/* Content */}
       {!collapsed && (
         <div style={{ height: PANEL_HEIGHT }} className={surface}>
-          {/* AI panel: stays mounted (hidden when inactive) so chat survives */}
-          <div className={`h-full w-full ${active === AI_TAB_ID ? "" : "hidden"}`}>
-            <AIPanel
-              projectId={projectId}
-              attachables={attachables}
-              externalAttachments={aiAttachments}
-              onExternalConsumed={onAiAttachmentsConsumed}
-              onChangeset={onChangeset}
-            />
-          </div>
-          {terminals.length === 0 && active !== AI_TAB_ID && (
+          {terminals.length === 0 && (
             <div className="flex h-full items-center justify-center gap-2 text-xs text-muted-foreground">
               No terminals open.
               <button
