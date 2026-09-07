@@ -884,8 +884,9 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
 
   return (
     <div className="flex h-full w-full overflow-hidden">
-      {/* Left agent rail — collapsible, like Bolt */}
-      {!aiCollapsed ? (
+      {/* Left agent rail — fully unmounted when collapsed (no stub bar).
+          Reopen via the Agent buttons in the view bar below the navbar. */}
+      {!aiCollapsed && (
         <>
           <aside
             style={{ width: aiWidth }}
@@ -935,16 +936,6 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
             className="w-1 shrink-0 cursor-col-resize transition-colors hover:bg-primary/20"
           />
         </>
-      ) : (
-        <div className="flex shrink-0 flex-col items-center gap-1 border-r bg-background py-2">
-          <button
-            onClick={() => setAiCollapsed(false)}
-            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Expand agent panel"
-          >
-            <PanelLeftOpen className="size-4" />
-          </button>
-        </div>
       )}
       {view === "code" && !sidebarCollapsed && (
         <>
