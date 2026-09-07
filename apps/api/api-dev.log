@@ -1,0 +1,6 @@
+
+> api@1.0.0 dev C:\Lakshya\vibe-code-editor\apps\api
+> tsx watch src/index.ts
+
+Server is running on port 5000
+AI provider: ollama / model: gemma4:e2b

@@ -142,7 +142,7 @@ export const aiController = {
   },
 
   async listProviders(_req: Request, res: Response) {
-    const def = (process.env["AI_PROVIDER"] ?? "openai").toLowerCase();
+    const def = (process.env["AI_PROVIDER"] ?? "ollama").toLowerCase();
     const providers = (
       Object.keys(SUPPORTED_PROVIDERS) as Array<keyof typeof SUPPORTED_PROVIDERS>
     ).map((id) => {

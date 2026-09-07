@@ -37,4 +37,7 @@ app.use(errorHandler);
 
 app.listen(process.env.PORT || 5000, () => {
   console.log(`Server is running on port ${process.env.PORT || 5000}`);
+  console.log(
+    `AI provider: ${process.env["AI_PROVIDER"] ?? "ollama (default)"} / model: ${process.env["AI_DEFAULT_MODEL"] || process.env["OLLAMA_MODEL"] || "provider default"}`,
+  );
 });

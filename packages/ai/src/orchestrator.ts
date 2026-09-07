@@ -145,7 +145,7 @@ export class AIOrchestrator {
     try {
       const provider = this.create(input.provider);
       if (!provider.isConfigured()) {
-        const id = input.provider ?? process.env["AI_PROVIDER"] ?? "openai";
+        const id = input.provider ?? process.env["AI_PROVIDER"] ?? "ollama";
         yield makeEvent("error", {
           code: "PROVIDER_NOT_CONFIGURED",
           message: `Provider "${id}" is not configured (missing key). Send {"provider":"mock"} or configure it.`,
@@ -375,7 +375,7 @@ export class AIOrchestrator {
   ): Promise<string> {
     const provider = this.create(input.provider);
     if (!provider.isConfigured()) {
-      const id = input.provider ?? process.env["AI_PROVIDER"] ?? "openai";
+      const id = input.provider ?? process.env["AI_PROVIDER"] ?? "ollama";
       throw new Error(
         `Provider "${id}" is not configured (missing key). Send {"provider":"mock"} or configure it.`,
       );

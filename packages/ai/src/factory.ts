@@ -37,7 +37,7 @@ export const SUPPORTED_PROVIDERS: Record<AiProviderId, ProviderMeta> = {
     id: "ollama",
     label: "Ollama (local)",
     envKey: null,
-    defaultModel: "gemma3:latest",
+    defaultModel: "gemma4:e2b",
   },
   mock: {
     id: "mock",
@@ -48,7 +48,7 @@ export const SUPPORTED_PROVIDERS: Record<AiProviderId, ProviderMeta> = {
 };
 
 function normalizeId(id: string | undefined): AiProviderId {
-  const norm = (id ?? process.env["AI_PROVIDER"] ?? "openai").toLowerCase();
+  const norm = (id ?? process.env["AI_PROVIDER"] ?? "ollama").toLowerCase();
   if (norm === "google") return "gemini";
   if ((Object.keys(SUPPORTED_PROVIDERS) as string[]).includes(norm)) {
     return norm as AiProviderId;

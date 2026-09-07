@@ -8,7 +8,7 @@ function baseURL(): string {
 }
 
 function resolveModel(reqModel: string | undefined): string {
-  return reqModel || process.env["OLLAMA_MODEL"] || "gemma3:latest";
+  return reqModel || process.env["OLLAMA_MODEL"] || "gemma4:e2b";
 }
 
 interface OllamaChatLine {
@@ -27,7 +27,7 @@ export class OllamaProvider implements AiProvider {
   }
 
   defaultModel(): string {
-    return "gemma3:latest";
+    return "gemma4:e2b";
   }
 
   async *streamChat(req: ChatRequest): AsyncIterable<string> {
