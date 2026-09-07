@@ -3,6 +3,7 @@
 import React, { useState } from "react";
 import { CreateProjectCard } from "./create-project-card";
 import { RecentProjects } from "./recent-projects";
+import { StarredProjects } from "./starred-projects";
 import { CreateProjectSheet } from "components/projects/create-project-sheet";
 
 export function DashboardHome() {
@@ -29,6 +30,8 @@ export function DashboardHome() {
       </div>
 
       <CreateProjectCard onCreateProject={() => setOpen(true)} />
+
+      <StarredProjects compact />
 
       <RecentProjects />
     </div>

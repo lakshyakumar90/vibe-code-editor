@@ -3,6 +3,40 @@
 import { useState, useEffect, useCallback } from "react";
 import { projectService, Project, CreateProjectData } from "@/lib/services/projects";
 
+/**
+ * Optimistic star toggle shared by list + detail hooks: flips immediately,
+ * confirms against POST /:id/favorite, rolls back on failure.
+ */
+function useToggleFavorite(
+  apply: (updater: (prev: Project[]) => Project[]) => void,
+) {
+  return useCallback(
+    async (id: string) => {
+      apply((prev) =>
+        prev.map((p) =>
+          p.id === id ? { ...p, isFavorite: !p.isFavorite } : p,
+        ),
+      );
+      try {
+        const res = await projectService.toggleFavorite(id);
+        apply((prev) =>
+          prev.map((p) =>
+            p.id === id ? { ...p, isFavorite: res.isFavorite } : p,
+          ),
+        );
+      } catch {
+        apply((prev) =>
+          prev.map((p) =>
+            p.id === id ? { ...p, isFavorite: !p.isFavorite } : p,
+          ),
+        );
+        throw new Error("Failed to update favorite");
+      }
+    },
+    [apply],
+  );
+}
+
 interface UseProjectsOptions {
   limit?: number;
 }
@@ -12,6 +46,7 @@ interface UseProjectsReturn {
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
+  toggleFavorite: (id: string) => Promise<void>;
 }
 
 export function useProjects(options: UseProjectsOptions = {}): UseProjectsReturn {
@@ -42,6 +77,7 @@ export function useProjects(options: UseProjectsOptions = {}): UseProjectsReturn
     loading,
     error,
     refetch: fetchProjects,
+    toggleFavorite: useToggleFavorite(setProjects),
   };
 }
 
@@ -50,6 +86,7 @@ interface UseProjectReturn {
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
+  toggleFavorite: () => Promise<void>;
 }
 
 export function useProject(id: string): UseProjectReturn {
@@ -76,11 +113,27 @@ export function useProject(id: string): UseProjectReturn {
     }
   }, [id, fetchProject]);
 
+  const toggleFavorite = useToggleFavorite(
+    useCallback(
+      (updater: (prev: Project[]) => Project[]) => {
+        setProject((prev) => {
+          if (!prev) return prev;
+          return updater([prev])[0] ?? prev;
+        });
+      },
+      [],
+    ),
+  );
+
   return {
     project,
     loading,
     error,
     refetch: fetchProject,
+    toggleFavorite: useCallback(
+      () => (project ? toggleFavorite(project.id) : Promise.resolve()),
+      [project, toggleFavorite],
+    ),
   };
 }
 

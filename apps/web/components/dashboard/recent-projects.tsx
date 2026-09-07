@@ -17,6 +17,7 @@ import {
 } from "@repo/ui";
 
 import { useProjects } from "@/hooks/use-projects";
+import { FavoriteButton } from "@/components/projects/favorite-button";
 
 function formatRelativeTime(dateString: string): string {
   const now = new Date();
@@ -43,7 +44,7 @@ function getInitials(name: string): string {
 }
 
 export function RecentProjects() {
-  const { projects, loading } = useProjects({ limit: 5 });
+  const { projects, loading, toggleFavorite } = useProjects({ limit: 5 });
 
   if (loading) {
     return (
@@ -189,16 +190,25 @@ export function RecentProjects() {
                       </TableCell>
 
                       <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          render={<Link href={`/dashboard/projects/${project.id}`} />}
-                          nativeButton={false}
-                          className="opacity-0 transition-opacity group-hover:opacity-100"
-                        >
-                          <ArrowRight className="size-4" />
-                          <span className="sr-only">Open {project.name}</span>
-                        </Button>
+                        <div className="flex items-center justify-end gap-0.5">
+                          <FavoriteButton
+                            projectId={project.id}
+                            projectName={project.name}
+                            isFavorite={project.isFavorite}
+                            onToggle={toggleFavorite}
+                            className="opacity-0 transition-opacity group-hover:opacity-100"
+                          />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            render={<Link href={`/dashboard/projects/${project.id}`} />}
+                            nativeButton={false}
+                            className="opacity-0 transition-opacity group-hover:opacity-100"
+                          >
+                            <ArrowRight className="size-4" />
+                            <span className="sr-only">Open {project.name}</span>
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))

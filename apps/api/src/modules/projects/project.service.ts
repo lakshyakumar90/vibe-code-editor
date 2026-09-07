@@ -22,8 +22,12 @@ export const projectService = {
     return ProjectRepository.getAllProjectsForUser(userId);
   },
 
-  async getProjectById(projectId: string) {
-    return ProjectRepository.getProjectById(projectId);
+  async getProjectById(projectId: string, userId?: string) {
+    return ProjectRepository.getProjectById(projectId, userId);
+  },
+
+  async toggleFavorite(projectId: string, userId: string) {
+    return ProjectRepository.toggleFavorite(projectId, userId);
   },
 
   async updateProject(projectId: string, input: UpdateProjectInput) {

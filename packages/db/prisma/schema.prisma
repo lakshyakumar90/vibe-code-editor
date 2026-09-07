@@ -20,6 +20,7 @@ model User {
 
   projects   Project[]
   membership ProjectMember[]
+  favorites  ProjectFavorite[]
 
   @@unique([email])
   @@map("user")
@@ -86,6 +87,7 @@ model Project {
   members ProjectMember[]
   files   File[]
   messages Message[]
+  favorites ProjectFavorite[]
 
   aiConversations AIConversation[]
   aiPlans         AIPlan[]
@@ -128,6 +130,23 @@ enum ProjectRole {
   OWNER
   EDITOR
   VIEWER
+}
+
+model ProjectFavorite {
+  id        String @id @default(cuid())
+  projectId String
+  userId    String
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  // One star per user per project.
+  @@unique([projectId, userId])
+  @@index([userId])
+  @@index([projectId])
+  @@map("project_favorite")
 }
 
 model File {

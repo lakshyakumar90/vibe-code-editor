@@ -136,7 +136,7 @@ export const ProjectRepository = {
   },
 
   async getAllProjectsForUser(userId: string) {
-    return prisma.project.findMany({
+    const projects = await prisma.project.findMany({
       where: {
         OR: [
           {
@@ -174,12 +174,27 @@ export const ProjectRepository = {
             },
           },
         },
+        favorites: {
+          where: { userId },
+          select: { userId: true },
+        },
       },
     });
+    // Favorites first, then most recently updated.
+    return projects
+      .map(({ favorites, ...rest }) => ({
+        ...rest,
+        isFavorite: favorites.length > 0,
+      }))
+      .sort(
+        (a, b) =>
+          Number(b.isFavorite) - Number(a.isFavorite) ||
+          b.updatedAt.getTime() - a.updatedAt.getTime(),
+      );
   },
 
-  async getProjectById(projectId: string) {
-    return prisma.project.findUnique({
+  async getProjectById(projectId: string, userId?: string) {
+    const project = await prisma.project.findUnique({
       where: {
         id: projectId,
       },
@@ -199,8 +214,16 @@ export const ProjectRepository = {
             createdAt: true,
           },
         },
+        favorites: userId
+          ? { where: { userId }, select: { userId: true } }
+          : false,
       },
     });
+    if (!project) return null;
+    const { favorites, ...rest } = project as typeof project & {
+      favorites?: Array<{ userId: string }>;
+    };
+    return { ...rest, isFavorite: (favorites?.length ?? 0) > 0 };
   },
 
   async updateProject(
@@ -224,6 +247,23 @@ export const ProjectRepository = {
         id: projectId,
       },
     });
+  },
+
+  /** Toggle the per-user star. Favorites cascade-delete with the project. */
+  async toggleFavorite(projectId: string, userId: string) {
+    const existing = await prisma.projectFavorite.findUnique({
+      where: { projectId_userId: { projectId, userId } },
+    });
+    if (existing) {
+      await prisma.projectFavorite.delete({
+        where: { projectId_userId: { projectId, userId } },
+      });
+      return { isFavorite: false };
+    }
+    await prisma.projectFavorite.create({
+      data: { projectId, userId },
+    });
+    return { isFavorite: true };
   },
 
   async getMembership(projectId: string, userId: string) { 

@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { FolderKanban } from "lucide-react";
 import { AuthGuard } from "@/components/auth/auth-guard";
-import { Button, Card, CardContent, Skeleton } from "@repo/ui";
+import { Card, CardContent, Skeleton } from "@repo/ui";
 import { useProjects } from "@/hooks/use-projects";
+import { FavoriteButton } from "@/components/projects/favorite-button";
+import { DeleteProjectButton } from "@/components/projects/delete-project-button";
 
 function getInitials(name: string): string {
   return name
@@ -16,7 +18,7 @@ function getInitials(name: string): string {
 }
 
 export default function ProjectsPage() {
-  const { projects, loading } = useProjects();
+  const { projects, loading, refetch, toggleFavorite } = useProjects();
 
   if (loading) {
     return (
@@ -55,21 +57,38 @@ export default function ProjectsPage() {
         ) : (
           <div className="grid gap-4">
             {projects.map((project) => (
-              <Link
+              <div
                 key={project.id}
-                href={`/dashboard/projects/${project.id}`}
                 className="flex items-center gap-4 border rounded-lg p-4 hover:bg-accent transition-colors"
               >
-                <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-muted/30">
-                  <FolderKanban className="size-5 text-muted-foreground" />
+                <Link
+                  href={`/dashboard/projects/${project.id}`}
+                  className="flex min-w-0 flex-1 items-center gap-4"
+                >
+                  <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border bg-muted/30">
+                    <FolderKanban className="size-5 text-muted-foreground" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="font-medium truncate">{project.name}</p>
+                    <p className="text-sm text-muted-foreground truncate">
+                      {project.description || "No description"}
+                    </p>
+                  </div>
+                </Link>
+                <div className="flex shrink-0 items-center gap-1">
+                  <FavoriteButton
+                    projectId={project.id}
+                    projectName={project.name}
+                    isFavorite={project.isFavorite}
+                    onToggle={toggleFavorite}
+                  />
+                  <DeleteProjectButton
+                    projectId={project.id}
+                    projectName={project.name}
+                    onDeleted={refetch}
+                  />
                 </div>
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium truncate">{project.name}</p>
-                  <p className="text-sm text-muted-foreground truncate">
-                    {project.description || "No description"}
-                  </p>
-                </div>
-                <div className="flex items-center gap-3">
+                <div className="flex shrink-0 items-center gap-3">
                   <div className="flex -space-x-2">
                     {project.members.slice(0, 3).map((member) => (
                       <div
@@ -90,7 +109,7 @@ export default function ProjectsPage() {
                     {project.template}
                   </span>
                 </div>
-              </Link>
+              </div>
             ))}
           </div>
         )}

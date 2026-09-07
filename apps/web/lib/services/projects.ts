@@ -19,6 +19,7 @@ export interface Project {
   createdAt: string;
   updatedAt: string;
   ownerId: string;
+  isFavorite: boolean;
   owner: {
     id: string;
     name: string;
@@ -63,5 +64,13 @@ export const projectService = {
 
   async deleteProject(id: string): Promise<void> {
     await api.delete<ApiResponse<void>>(`/api/projects/${id}`);
+  },
+
+  async toggleFavorite(id: string): Promise<{ isFavorite: boolean }> {
+    const response = await api.post<ApiResponse<{ isFavorite: boolean }>>(
+      `/api/projects/${id}/favorite`,
+      {},
+    );
+    return response.data;
   },
 };

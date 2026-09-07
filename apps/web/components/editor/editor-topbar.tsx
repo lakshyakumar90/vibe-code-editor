@@ -4,6 +4,8 @@ import Link from "next/link";
 import { ArrowLeft, Bot, Code2, Eye } from "lucide-react";
 import { ModeToggle } from "@/components/layout/theme-mode-toggle";
 import { useProject } from "@/hooks/use-projects";
+import { FavoriteButton } from "@/components/projects/favorite-button";
+import { DeleteProjectButton } from "@/components/projects/delete-project-button";
 
 export type EditorView = "code" | "preview";
 
@@ -16,7 +18,7 @@ interface EditorTopbarProps {
 }
 
 export function EditorTopbar({ projectId, view, onViewChange, agentOpen, onToggleAgent }: EditorTopbarProps) {
-  const { project } = useProject(projectId);
+  const { project, toggleFavorite } = useProject(projectId);
   const tab = (active: boolean) =>
     `flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${
       active ? "bg-accent text-foreground" : "text-muted-foreground hover:text-foreground"
@@ -41,7 +43,22 @@ export function EditorTopbar({ projectId, view, onViewChange, agentOpen, onToggl
           {project?.name ?? "Loading..."}
         </span>
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1">
+        {project && (
+          <>
+            <FavoriteButton
+              projectId={project.id}
+              projectName={project.name}
+              isFavorite={project.isFavorite}
+              onToggle={toggleFavorite}
+            />
+            <DeleteProjectButton
+              projectId={project.id}
+              projectName={project.name}
+              redirectAfterDelete
+            />
+          </>
+        )}
         <ModeToggle />
       </div>
       </div>

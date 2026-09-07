@@ -26,6 +26,11 @@ router.delete(
   requireProjectAccess(ProjectRole.OWNER),
   projectController.deleteProject,
 );
+router.post(
+  "/:projectId/favorite",
+  requireProjectAccess(ProjectRole.VIEWER),
+  projectController.toggleFavorite,
+);
 
 router.post(
   "/:projectId/members",

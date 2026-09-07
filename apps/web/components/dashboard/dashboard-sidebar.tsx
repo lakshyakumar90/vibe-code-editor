@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 import {
   Clock3,
   FolderKanban,
@@ -18,6 +19,9 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@repo/ui";
+
+import { useProjects } from "@/hooks/use-projects";
+import { cn } from "@/lib/utils";
 
 const items = [
   {
@@ -43,6 +47,10 @@ const items = [
 ];
 
 export function DashboardSidebar() {
+  const pathname = usePathname();
+  const { projects } = useProjects();
+  const starred = projects.filter((p) => p.isFavorite).slice(0, 7);
+
   return (
     <Sidebar>
       <SidebarContent className="pt-20">
@@ -53,10 +61,13 @@ export function DashboardSidebar() {
             <SidebarMenu className="flex flex-col gap-1">
               {items.map((item) => {
                 const Icon = item.icon;
+                const active = pathname === item.url;
 
                 return (
                   <SidebarMenuItem key={item.title} className="flex items-center">
-                    <SidebarMenuButton >
+                    <SidebarMenuButton
+                      className={cn(active && "bg-accent font-medium")}
+                    >
                       <Link href={item.url} className="w-full flex items-center gap-2">
                         <Icon />
                         <span>{item.title}</span>
@@ -68,6 +79,36 @@ export function DashboardSidebar() {
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
+
+        {starred.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel className="flex items-center gap-1.5">
+              <Star className="size-3.5 fill-yellow-500 text-yellow-500" />
+              Favorites
+            </SidebarGroupLabel>
+
+            <SidebarGroupContent>
+              <SidebarMenu className="flex flex-col gap-1">
+                {starred.map((project) => {
+                  const url = `/dashboard/projects/${project.id}`;
+                  const active = pathname === url;
+                  return (
+                    <SidebarMenuItem key={project.id} className="flex items-center">
+                      <SidebarMenuButton
+                        className={cn(active && "bg-accent font-medium")}
+                      >
+                        <Link href={url} className="w-full flex items-center gap-2" title={project.name}>
+                          <FolderKanban className="size-4 shrink-0 text-muted-foreground" />
+                          <span className="truncate">{project.name}</span>
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
     </Sidebar>
   );

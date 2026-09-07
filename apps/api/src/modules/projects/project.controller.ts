@@ -46,7 +46,7 @@ export const projectController = {
       });
     }
     
-    const project = await projectService.getProjectById(projectId);
+    const project = await projectService.getProjectById(projectId, req.user?.id);
 
     if (!project) {
       return res.status(404).json({
@@ -90,8 +90,7 @@ export const projectController = {
     });
   },
 
-  async deleteProject(req: Request, res: Response) {
-    const { projectId } = req.params;
+  async deleteProject(req: Request, res: Response) {    const { projectId } = req.params;
 
     if (!projectId || typeof projectId !== "string") {
       return res.status(400).json({
@@ -114,6 +113,34 @@ export const projectController = {
     return res.status(200).json({
       success: true,
       data: deletedProject,
+    });
+  },
+
+  async toggleFavorite(req: Request, res: Response) {
+    const { projectId } = req.params;
+    const userId = req.user?.id;
+
+    if (!projectId || typeof projectId !== "string") {
+      return res.status(400).json({
+        success: false,
+        code: "INVALID_PROJECT",
+        message: "Project ID must be a valid single string",
+      });
+    }
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        code: "INVALID_USER",
+        message: "User not authenticated",
+      });
+    }
+
+    const result = await projectService.toggleFavorite(projectId, userId);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
     });
   },
 
