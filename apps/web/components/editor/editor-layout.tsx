@@ -1025,12 +1025,13 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       )}
 
       <main className="min-w-0 flex flex-1 flex-col overflow-hidden bg-background">
-        {view === "preview" ? (
-          <div className="min-h-0 flex-1">
-            <PreviewPanel fullscreen />
-          </div>
-        ) : (
-        <>
+        {/* Both views stay mounted so the preview iframe never reloads
+            and terminal shells survive Code <-> Preview switches. Only
+            visibility toggles. */}
+        <div className={`min-h-0 flex-1 ${view === "preview" ? "" : "hidden"}`}>
+          <PreviewPanel fullscreen />
+        </div>
+        <div className={`flex min-h-0 flex-1 flex-col ${view === "code" ? "" : "hidden"}`}>
         {sidebarCollapsed && (
           <div className="flex h-9 shrink-0 items-center border-b bg-muted/40 px-2">
             <button
@@ -1277,8 +1278,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
           })()}
         </div>
         <BottomPanel />
-        </>
-        )}
+        </div>
       </main>
 
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
