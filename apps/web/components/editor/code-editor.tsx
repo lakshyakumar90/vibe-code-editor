@@ -228,16 +228,27 @@ export function CodeEditor({
           signal: aborter.signal,
           ...(provider ? { provider, model } : {}),
         });
-      const notConfigured = (err: unknown) =>
-        err instanceof Error &&
-        (/not configured/i.test(err.message) ||
-          (err as Error & { code?: unknown }).code === "PROVIDER_NOT_CONFIGURED");
+      const shouldFallbackToServerDefault = (err: unknown) => {
+        if (!(err instanceof Error)) return false;
+        const code = (err as Error & { code?: unknown }).code;
+        if (/not configured/i.test(err.message) || code === "PROVIDER_NOT_CONFIGURED") return true;
+        // Resilient inline: local Ollama down/slow shouldn't kill ghost text.
+        // Fall back to server-default for unavailability/timeout only.
+        if (inline.provider !== "ollama") return false;
+        if (code === "PROVIDER_UNAVAILABLE" || code === "HTTP_502" || code === "HTTP_404") return true;
+        if (code === "ABORTED" || code === "HTTP_499") return true;
+        return (
+          /ollama pull|model .*not found|no such model|ECONNREFUSED|fetch failed|failed to fetch/i.test(
+            err.message,
+          )
+        );
+      };
       try {
         let text: string;
         try {
           text = await attempt(inline.provider, inline.model);
         } catch (err) {
-          if (!notConfigured(err) || aborter.signal.aborted) throw err;
+          if (!shouldFallbackToServerDefault(err) || aborter.signal.aborted) throw err;
           text = await attempt();
           via = "server-default";
         }
@@ -264,7 +275,9 @@ export function CodeEditor({
           inlineRateLimitedUntil = Date.now() + RATE_LIMIT_COOLDOWN_MS;
         }
         const status = aborted
-          ? "aborted"
+          ? ms > 2000 && inline.provider === "ollama"
+            ? `aborted (slow ollama — still generating after ${Math.round(ms / 100) / 10}s)`
+            : "aborted"
           : rateLimited
             ? "rate-limited, cooling down"
             : `error: ${err instanceof Error ? err.message : "unknown"}`;

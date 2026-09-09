@@ -254,6 +254,41 @@ export function extractChangeSet(text: string): ChangeSetInput | null {
   if (generic && Array.isArray(generic.changes)) {
     return { changes: generic.changes as FileChange[] };
   }
+  // Tolerate a missing closing fence when the JSON itself is complete
+  // (model forgot the trailing ```). Truly truncated JSON still fails —
+  // the orchestrator retries those with a re-emit nudge.
+  const unclosed = extractUnclosedChangeSet(text, "changeset") ?? extractUnclosedChangeSet(text, "json");
+  if (unclosed) return unclosed;
+  return null;
+}
+
+/**
+ * Parse JSON after a ```<label> opener with no closing fence. Tries the
+ * whole tail, then progressively the tail cut at the last `}` (trailing
+ * prose after complete JSON). Returns null when nothing parses.
+ */
+export function extractUnclosedChangeSet(text: string, label: string): ChangeSetInput | null {
+  const open = new RegExp("```" + label + "\\s*\\n([\\s\\S]*)$", "i").exec(text);
+  const tail = open?.[1]?.trim();
+  if (!tail || /```/.test(tail)) return null; // closed or not actually unclosed
+  const attempts: string[] = [tail];
+  let idx = tail.lastIndexOf("}");
+  while (idx !== -1 && attempts.length < 4) {
+    const cut = tail.slice(0, idx + 1);
+    if (!attempts.includes(cut)) attempts.push(cut);
+    idx = tail.lastIndexOf("}", idx - 1);
+  }
+  for (const raw of attempts) {
+    try {
+      const parsed = JSON.parse(raw) as { changes?: unknown };
+      if (parsed && Array.isArray(parsed.changes)) {
+        return { changes: parsed.changes as FileChange[] };
+      }
+      return null; // parsed but not a changeset — don't keep guessing
+    } catch {
+      continue;
+    }
+  }
   return null;
 }
 

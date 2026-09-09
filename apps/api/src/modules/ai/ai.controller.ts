@@ -299,6 +299,28 @@ export const aiController = {
         return res.status(499).json({ success: false, code: "ABORTED", message: "Request aborted" });
       }
       const message = err instanceof Error ? err.message : "Unknown error";
+      // Ollama-specific actionable mapping (local provider is best-effort).
+      // Missing model tag -> treat as not configured so the editor can fall
+      // back to server-default; hint the pull command. Raw message preserved.
+      if (/model .*not found|no such model|model .*does not exist|Ollama completion failed \(404\)/i.test(message)) {
+        return res.status(404).json({
+          success: false,
+          code: "PROVIDER_NOT_CONFIGURED",
+          message: `${message} (run: ollama pull gemma4:e2b)`,
+        });
+      }
+      // Daemon down / wrong OLLAMA_URL (e.g. localhost inside Docker) ->
+      // unavailable so the editor can fall back instead of going dark.
+      // `input.provider` is in scope: only map network errors to
+      // PROVIDER_UNAVAILABLE for ollama (cloud network errors keep the
+      // generic rate/5xx handling below).
+      if (/ECONNREFUSED|fetch failed|failed to fetch|Failed to fetch|network|connect|ENOTFOUND|EHOSTUNREACH/i.test(message) && (input.provider === "ollama" || /ollama|ECONNREFUSED|localhost:11434|127\.0\.0\.1/i.test(message))) {
+        return res.status(502).json({
+          success: false,
+          code: "PROVIDER_UNAVAILABLE",
+          message,
+        });
+      }
       // Preserve provider rate/budget semantics: our providers embed the
       // upstream status ("failed (429)") in the message. A 429 is retryable
       // and must not masquerade as a 500 INTERNAL_ERROR.

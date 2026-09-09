@@ -2,6 +2,14 @@ import type { AiProvider, ChatRequest, InlineRequest } from "../types";
 import { INLINE_FENCE_INSTRUCTION } from "../inline";
 import { ndjsonLines } from "./stream";
 
+/**
+ * Tight output cap for local inline: ghost text is 1-5 lines. 800 tokens
+ * (cloud-sized) keeps a local model generating for 5s+ until Monaco cancels
+ * the request — observed as `(canceled)` in the network tab. 128 tokens
+ * returns in ~1s and still fills the fence.
+ */
+const OLLAMA_INLINE_NUM_PREDICT = 128;
+
 /** Local Ollama (NDJSON streaming via /api/chat). */
 
 function baseURL(): string {
@@ -39,9 +47,14 @@ export class OllamaProvider implements AiProvider {
         model: resolveModel(req.model),
         messages: req.messages.map((m) => ({ role: m.role, content: m.content })),
         stream: true,
-        ...(req.temperature !== undefined
-          ? { options: { temperature: req.temperature } }
-          : {}),
+        // Agent/plan turns carry whole files + long changesets — the 4k
+        // default context truncates mid-JSON (unclosed-fence). No output cap:
+        // truncating here is what strands the changeset fence.
+        options: {
+          num_ctx: 8192,
+          ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),
+        },
+        keep_alive: "30m",
       }),
       signal: req.signal,
     });
@@ -59,11 +72,15 @@ export class OllamaProvider implements AiProvider {
   }
 
   async completeInline(req: InlineRequest): Promise<string> {
+    const model = resolveModel(req.model);
+    if (process.env["NODE_ENV"] !== "production") {
+      console.debug(`[ollama] completeInline model=${model}`);
+    }
     const res = await fetch(`${baseURL()}/api/chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: resolveModel(req.model),
+        model,
         messages: [
           {
             role: "system",
@@ -75,7 +92,17 @@ export class OllamaProvider implements AiProvider {
           },
         ],
         stream: false,
-        options: { temperature: req.temperature ?? 0.2 },
+        // Inline-only caps: ghost text needs little output. An uncapped
+        // local model rambles past the API 15s abort and gets cleaned to "".
+        // `think: false` skips chain-of-thought on reasoning models (ignored
+        // otherwise) — both cut time-to-first-byte for ghost text.
+        think: false,
+        options: {
+          temperature: req.temperature ?? 0.2,
+          num_predict: OLLAMA_INLINE_NUM_PREDICT,
+          num_ctx: 4096,
+        },
+        keep_alive: "30m",
       }),
       signal: req.signal,
     });

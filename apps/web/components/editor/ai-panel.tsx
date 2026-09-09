@@ -54,6 +54,9 @@ function nextId(prefix: string): string {
 function stripAgentBlocks(content: string): string {
   return content
     .replace(/```(?:tool|changeset|plan)\s*\n[\s\S]*?```/g, "")
+    // Models sometimes use ```json for the changeset despite the contract —
+    // strip those too when they carry a changes payload, else raw JSON leaks.
+    .replace(/```json\s*\n[\s\S]*?"changes"\s*:[\s\S]*?```/g, "")
     .replace(/<think>[\s\S]*?(<\/think>|$)/gi, "")
     .replace(/<\/think>/gi, "")
     .replace(/\n{3,}/g, "\n\n")
@@ -115,11 +118,64 @@ function AssistantMarkdown({ content }: { content: string }) {
 }
 
 /**
+ * Extract <think> blocks (closed or trailing unclosed) for the Thinking
+ * accordion. The prose renderer strips them — this surfaces them instead.
+ */
+function extractThinking(content: string): string[] {
+  const out: string[] = [];
+  const closed = content.match(/<think>([\s\S]*?)<\/think>/gi);
+  if (closed) {
+    for (const block of closed) {
+      const inner = block.replace(/<\/?think>/gi, "").trim();
+      if (inner) out.push(inner);
+    }
+  }
+  // Trailing unclosed <think> (still streaming): show live.
+  const tail = content.match(/<think>([\s\S]*)$/i);
+  if (tail && !/<\/think>/i.test(tail[1] ?? "")) {
+    const inner = (tail[1] ?? "").replace(/<\/?think>/gi, "").trim();
+    if (inner && !out.includes(inner)) out.push(inner);
+  }
+  return out;
+}
+
+function ThinkingCard({ blocks }: { blocks: string[] }) {
+  const [open, setOpen] = useState(false);
+  if (blocks.length === 0) return null;
+  const preview = blocks[0]?.split("\n")[0]?.slice(0, 80) ?? "Reasoning";
+  return (
+    <div className="rounded-lg border bg-muted/30">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs text-muted-foreground hover:text-foreground"
+        title="Model reasoning"
+      >
+        <ChevronDown
+          className={`size-3.5 shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
+        />
+        <Bot className="size-3.5 shrink-0" />
+        <span className="truncate font-medium">Thinking{open ? "" : ` — ${preview}`}</span>
+      </button>
+      {open && (
+        <div className="space-y-1.5 border-t px-2.5 py-2">
+          {blocks.map((b, i) => (
+            <p key={i} className="whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
+              {b}
+            </p>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * Persistent tool-activity timeline (Cursor-style). Each toolLoop() step
  * stays visible after the model moves on; rows expand individually to
- * show tool name, args, and timestamp.
+ * show tool name, args, and timestamp. File paths navigate to the editor.
  */
-function ToolTimeline({ steps }: { steps: ToolStep[] }) {
+function ToolTimeline({ steps, onOpenFile }: { steps: ToolStep[]; onOpenFile?: (path: string) => void }) {
   const [open, setOpen] = useState<Set<number>>(new Set());
   const toggle = (i: number) =>
     setOpen((prev) => {
@@ -143,16 +199,38 @@ function ToolTimeline({ steps }: { steps: ToolStep[] }) {
               <ChevronDown
                 className={`size-3 shrink-0 transition-transform ${expanded ? "" : "-rotate-90"}`}
               />
-              <Check className="size-3 shrink-0 text-green-500" />
+              {/unknown tool|failed|error/i.test(step.resultSummary) ? (
+                <X className="size-3 shrink-0 text-red-500" />
+              ) : (
+                <Check className="size-3 shrink-0 text-green-500" />
+              )}
               <span className="truncate">{step.resultSummary}</span>
             </button>
             {expanded && (
-              <div className="border-t px-2 py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
-                <div>
+              <div className="space-y-1 border-t px-2 py-1.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                   <span className="font-semibold text-foreground">{step.tool}</span>
-                  {Object.keys(step.args).length > 0 && (
-                    <span> {JSON.stringify(step.args)}</span>
-                  )}
+                  {Object.entries(step.args).map(([k, v]) => {
+                    const val = String(v);
+                    // Navigation: file-ish args open in the editor.
+                    if ((k === "path" || k === "prefix") && val && onOpenFile) {
+                      return (
+                        <button
+                          key={k}
+                          onClick={() => onOpenFile(val)}
+                          className="rounded bg-background px-1 py-px hover:text-foreground hover:underline"
+                          title={`Open ${val} in editor`}
+                        >
+                          {k}: {val}
+                        </button>
+                      );
+                    }
+                    return (
+                      <span key={k} className="rounded bg-background px-1 py-px">
+                        {k}: {val}
+                      </span>
+                    );
+                  })}
                 </div>
                 <div>{new Date(step.timestamp).toLocaleTimeString()}</div>
               </div>
@@ -190,12 +268,61 @@ function PlanChecklist({ plan }: { plan: PlanTask[] }) {  return (
   );
 }
 
+/**
+ * Cursor-style changeset card: collapsed file list instead of the raw
+ * "Pending changeset <id> ready for review" status line. Clicking a file
+ * opens it in the editor (existing file) or its diff preview (new file).
+ */
+function ChangeSetCard({
+  files,
+  onOpenFile,
+}: {
+  files: string[];
+  onOpenFile?: (path: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg border bg-muted/30">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-xs hover:text-foreground"
+      >
+        <ChevronDown
+          className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`}
+        />
+        <FileCode2 className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="font-medium">
+          {files.length} file{files.length === 1 ? "" : "s"} ready for review
+        </span>
+      </button>
+      {open && (
+        <ul className="space-y-0.5 border-t px-2 py-1.5">
+          {files.map((path) => (
+            <li key={path}>
+              <button
+                onClick={() => onOpenFile?.(path)}
+                className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-xs text-muted-foreground hover:bg-accent hover:text-foreground hover:underline"
+                title={`Open ${path} in editor`}
+              >
+                <FileCode2 className="size-3.5 shrink-0" />
+                <span className="truncate font-mono text-[11px]">{path}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 export function AIPanel({
   projectId,
   attachables,
   externalAttachments,
   onExternalConsumed,
   onChangeset,
+  onOpenFile,
 }: {
   projectId: string;
   attachables: AttachableFile[];
@@ -204,6 +331,8 @@ export function AIPanel({
   onExternalConsumed: () => void;
   /** Agent-mode changeset ready → layout fetches diffs for review. */
   onChangeset: (changeSetId: string) => void;
+  /** Open a changeset file in the editor (existing) or diff preview (new). */
+  onOpenFile?: (path: string) => void;
 }) {
   const [mode, setMode] = useState<AiPanelMode>("ask");
   const [messages, setMessages] = useState<PanelMessage[]>([]);
@@ -383,17 +512,31 @@ export function AIPanel({
             prev.map((m) => (m.id === assistantId ? { ...m, plan } : m)),
           );
         },
-        onChangeset: (changeSetId) => {
-          setStatus(`ChangeSet ${changeSetId.slice(0, 8)} ready for review`);
+        onChangeset: (changeSetId, files) => {
+          // Attach the file list to the streaming message for the inline
+          // accordion card; the review strip (Accept/Reject) is still driven
+          // via onChangeset below. No status line — the card replaces it.
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    changeSetId,
+                    changeSetFiles: files && files.length > 0 ? files : undefined,
+                  }
+                : m,
+            ),
+          );
           onChangeset(changeSetId);
         },
         onDone: () => {
           setStreaming(false);
           streamingIdRef.current = null;
-          // Drop transient "Thinking…/Planning…" — keep only persistent
-          // notices (changeset ready). Otherwise it lingers under the reply.
+          // Drop transient "Thinking…/Planning…" on completion, but keep
+          // failure signals (e.g. changeset-invalid) — otherwise a failed
+          // run looks identical to success with no output.
           setStatus((prev) =>
-            prev && /changeset/i.test(prev) ? prev : null,
+            prev && /invalid|failed|error|not saved|retry|needs fix/i.test(prev) ? prev : null,
           );
           setMessages((prev) =>
             prev.map((m) =>
@@ -446,7 +589,7 @@ export function AIPanel({
                 </div>
               ) : (
                 <div key={m.id} className="space-y-2">
-                  {m.mode && (m.streaming || stripAgentBlocks(m.content) !== "" || m.plan) && (
+                  {m.mode && (m.streaming || stripAgentBlocks(m.content) !== "" || m.plan || (m.steps && m.steps.length > 0) || (m.changeSetFiles && m.changeSetFiles.length > 0)) && (
                     <div className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
                       <Bot className="size-3.5" />
                       <span>{m.streaming ? (status ?? "Thinking…") : MODE_META[m.mode].label}</span>
@@ -454,7 +597,10 @@ export function AIPanel({
                     </div>
                   )}
                   {m.steps && m.steps.length > 0 && (
-                    <ToolTimeline steps={m.steps} />
+                    <ToolTimeline steps={m.steps} onOpenFile={onOpenFile} />
+                  )}
+                  {extractThinking(m.content).length > 0 && (
+                    <ThinkingCard blocks={extractThinking(m.content)} />
                   )}
                   {stripAgentBlocks(m.content) !== "" && (
                     <div className="text-[13px] leading-relaxed">
@@ -469,6 +615,9 @@ export function AIPanel({
                       </div>
                       <PlanChecklist plan={m.plan} />
                     </div>
+                  )}
+                  {m.changeSetFiles && m.changeSetFiles.length > 0 && (
+                    <ChangeSetCard files={m.changeSetFiles} onOpenFile={onOpenFile} />
                   )}
                   {!m.streaming && (
                     <div className="flex items-center gap-0.5 text-muted-foreground">

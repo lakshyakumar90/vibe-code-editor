@@ -59,8 +59,12 @@ export async function readSSEStream(
         break;
       }
       case "changeset": {
-        const id = (parsed.data as { changeSetId?: unknown }).changeSetId;
-        if (typeof id === "string" && id.length > 0) events.onChangeset?.(id);
+        const d = parsed.data as { changeSetId?: unknown; files?: unknown };
+        const id = d.changeSetId;
+        const files = Array.isArray(d.files)
+          ? d.files.filter((f): f is string => typeof f === "string")
+          : undefined;
+        if (typeof id === "string" && id.length > 0) events.onChangeset?.(id, files);
         break;
       }
       case "error": {

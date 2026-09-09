@@ -37,7 +37,7 @@ export const SUPPORTED_PROVIDERS: Record<AiProviderId, ProviderMeta> = {
     id: "ollama",
     label: "Ollama (local)",
     envKey: null,
-    defaultModel: "qwen2.5-coder:7b",
+    defaultModel: "gemma4:e2b",
   },
   mock: {
     id: "mock",

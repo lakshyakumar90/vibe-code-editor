@@ -31,6 +31,9 @@ export interface PanelMessage {
   plan?: PlanTask[];
   /** Persistent tool-activity timeline (plan/agent modes). */
   steps?: ToolStep[];
+  /** Agent-mode changeset attached to this message (Cursor-style file list). */
+  changeSetId?: string;
+  changeSetFiles?: string[];
   feedback?: "up" | "down" | null;
   streaming?: boolean;
 }
@@ -47,7 +50,7 @@ export interface TransportEvents {
   onStatus(text: string, tool?: { name: string; args: Record<string, unknown> }): void;
   onPlan(plan: PlanTask[]): void;
   /** Agent-mode changeset ready for review (Phase 4). Optional. */
-  onChangeset?(changeSetId: string): void;
+  onChangeset?(changeSetId: string, files?: string[]): void;
   onDone(): void;
   onError(message: string): void;
 }

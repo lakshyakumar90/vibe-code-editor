@@ -421,6 +421,33 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     [pendingReview],
   );
 
+  /**
+   * Open a changeset file from the agent panel card (Cursor-style).
+   * Existing files open in the editor; proposed new files (no record yet)
+   * open in the diff preview pane — same as clicking the review strip.
+   */
+  const handleOpenPanelFile = useCallback(
+    (path: string) => {
+      const target = filesRef.current.find((f) => !f.isFolder && f.path === path);
+      if (target) {
+        setPreviewPath(null);
+        handleOpenFile(target);
+        return;
+      }
+      const diff = pendingReview?.diffs.find(
+        (d) => d.path === path && !d.deleted && d.newContent !== null && !d.isFolder,
+      );
+      if (diff) {
+        setPreviewPath(diff.path);
+        return;
+      }
+      // Changeset not loaded yet (event arrived before fetch finished) —
+      // the review strip will have it; nudge instead of going silent.
+      toast.info(diff === undefined && pendingReview === null ? "Loading changeset…" : `Nothing to preview for ${path}`);
+    },
+    [handleOpenFile, pendingReview],
+  );
+
   const handleOpenReviewFile = useCallback(
     (diff: FileDiff) => {
       if (diff.isFolder) {
@@ -916,6 +943,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
                 externalAttachments={aiAttachments}
                 onExternalConsumed={handleAiAttachmentsConsumed}
                 onChangeset={handleChangesetReady}
+                onOpenFile={handleOpenPanelFile}
               />
             </div>
           </aside>
