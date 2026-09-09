@@ -10,8 +10,10 @@ import {
   FileCode2,
   Loader2,
   Mic,
+  Play,
   Plus,
   Square,
+  Terminal,
   ThumbsDown,
   ThumbsUp,
   X,
@@ -26,7 +28,9 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { SseTransport } from "@/lib/ai/sse";
+import { postCommandResult } from "@/lib/ai/stream";
 import type {
+  AgentCommand,
   AiPanelMode,
   AttachableFile,
   AttachmentChip,
@@ -316,6 +320,90 @@ function ChangeSetCard({
   );
 }
 
+/**
+ * Approval card for an agent-requested terminal command. Run executes it
+ * in the project WebContainer; Reject declines. Output shows collapsed.
+ */
+function CommandCard({
+  cmd,
+  onRun,
+  onReject,
+}: {
+  cmd: AgentCommand;
+  onRun: () => void;
+  onReject: () => void;
+}) {
+  const [showOutput, setShowOutput] = useState(false);
+  return (
+    <div className="rounded-lg border bg-muted/30">
+      <div className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-xs">
+        <Terminal className="size-3.5 shrink-0 text-muted-foreground" />
+        <code className="min-w-0 flex-1 truncate font-mono text-[11px]">{cmd.command}</code>
+        {cmd.state === "pending" && (
+          <>
+            <button
+              onClick={onRun}
+              className="flex shrink-0 items-center gap-1 rounded bg-primary px-2 py-0.5 text-primary-foreground hover:bg-primary/90"
+              title={`Run: ${cmd.command}`}
+            >
+              <Play className="size-3" />
+              Run
+            </button>
+            <button
+              onClick={onReject}
+              className="shrink-0 rounded border px-2 py-0.5 hover:bg-accent"
+              title="Decline this command"
+            >
+              Reject
+            </button>
+          </>
+        )}
+        {cmd.state === "running" && (
+          <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" />
+            Running…
+          </span>
+        )}
+        {cmd.state === "done" && (
+          <span
+            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              cmd.exitCode === 0
+                ? "bg-green-500/15 text-green-500"
+                : "bg-red-500/15 text-red-500"
+            }`}
+          >
+            exit {cmd.exitCode ?? "?"}
+          </span>
+        )}
+        {cmd.state === "declined" && (
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            declined
+          </span>
+        )}
+      </div>
+      {cmd.state === "done" && cmd.output && (
+        <div className="border-t px-2 py-1.5">
+          <button
+            onClick={() => setShowOutput((v) => !v)}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            aria-expanded={showOutput}
+          >
+            <ChevronDown
+              className={`size-3 transition-transform ${showOutput ? "" : "-rotate-90"}`}
+            />
+            Output
+          </button>
+          {showOutput && (
+            <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded bg-background p-1.5 font-mono text-[11px] text-muted-foreground">
+              {cmd.output.slice(0, 4000)}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AIPanel({
   projectId,
   attachables,
@@ -323,6 +411,7 @@ export function AIPanel({
   onExternalConsumed,
   onChangeset,
   onOpenFile,
+  onExecuteCommand,
 }: {
   projectId: string;
   attachables: AttachableFile[];
@@ -333,6 +422,8 @@ export function AIPanel({
   onChangeset: (changeSetId: string) => void;
   /** Open a changeset file in the editor (existing) or diff preview (new). */
   onOpenFile?: (path: string) => void;
+  /** Run an approved agent command in the project terminal. */
+  onExecuteCommand?: (command: string) => Promise<{ output: string; exitCode: number }>;
 }) {
   const [mode, setMode] = useState<AiPanelMode>("ask");
   const [messages, setMessages] = useState<PanelMessage[]>([]);
@@ -421,13 +512,87 @@ export function AIPanel({
     );
   }, []);
 
+  const setCommandState = useCallback(
+    (
+      messageId: string,
+      commandId: string,
+      patch: Partial<AgentCommand> & { state: AgentCommand["state"] },
+    ) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                commands: (m.commands ?? []).map((c) =>
+                  c.commandId === commandId ? { ...c, ...patch } : c,
+                ),
+              }
+            : m,
+        ),
+      );
+    },
+    [],
+  );
+
+  /** Answer the backend's parked runCommand request (approval + result). */
+  const answerCommand = useCallback(
+    async (messageId: string, commandId: string, approved: boolean, output = "", exitCode = -1) => {
+      try {
+        await postCommandResult({ projectId, commandId, approved, output, exitCode });
+      } catch {
+        // Backend already moved on (timeout/abort) — card state still updates.
+      }
+    },
+    [projectId],
+  );
+
+  const handleRunCommand = useCallback(
+    async (messageId: string, commandId: string, command: string) => {
+      setCommandState(messageId, commandId, { state: "running" });
+      setStatus(`Running ${command}…`);
+      try {
+        if (!onExecuteCommand) throw new Error("Terminal is not available in this session");
+        const res = await onExecuteCommand(command);
+        setCommandState(messageId, commandId, {
+          state: "done",
+          output: res.output,
+          exitCode: res.exitCode,
+        });
+        await answerCommand(messageId, commandId, true, res.output, res.exitCode);
+      } catch (e) {
+        const output = e instanceof Error ? e.message : "Command failed to run";
+        setCommandState(messageId, commandId, { state: "done", output, exitCode: -1 });
+        await answerCommand(messageId, commandId, true, output, -1);
+      }
+    },
+    [answerCommand, onExecuteCommand, setCommandState],
+  );
+
+  const handleRejectCommand = useCallback(
+    async (messageId: string, commandId: string) => {
+      setCommandState(messageId, commandId, { state: "declined" });
+      await answerCommand(messageId, commandId, false, "Declined by user.", -1);
+    },
+    [answerCommand, setCommandState],
+  );
+
   const handleStop = useCallback(() => {
     transportRef.current?.abort();
     setStreaming(false);
     setStatus("Stopped");
     setMessages((prev) =>
       prev.map((m) =>
-        m.id === streamingIdRef.current ? { ...m, streaming: false } : m,
+        m.id === streamingIdRef.current
+          ? {
+              ...m,
+              streaming: false,
+              commands: (m.commands ?? []).map((c) =>
+                c.state === "pending" || c.state === "running"
+                  ? { ...c, state: "declined" as const }
+                  : c,
+              ),
+            }
+          : m,
       ),
     );
     streamingIdRef.current = null;
@@ -529,6 +694,22 @@ export function AIPanel({
           );
           onChangeset(changeSetId);
         },
+        onRunCommand: ({ commandId, command }) => {
+          setStatus(`Agent wants to run ${command}`);
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    commands: [
+                      ...(m.commands ?? []),
+                      { commandId, command, state: "pending" as const },
+                    ],
+                  }
+                : m,
+            ),
+          );
+        },
         onDone: () => {
           setStreaming(false);
           streamingIdRef.current = null;
@@ -589,7 +770,7 @@ export function AIPanel({
                 </div>
               ) : (
                 <div key={m.id} className="space-y-2">
-                  {m.mode && (m.streaming || stripAgentBlocks(m.content) !== "" || m.plan || (m.steps && m.steps.length > 0) || (m.changeSetFiles && m.changeSetFiles.length > 0)) && (
+                  {m.mode && (m.streaming || stripAgentBlocks(m.content) !== "" || m.plan || (m.steps && m.steps.length > 0) || (m.changeSetFiles && m.changeSetFiles.length > 0) || (m.commands && m.commands.length > 0)) && (
                     <div className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
                       <Bot className="size-3.5" />
                       <span>{m.streaming ? (status ?? "Thinking…") : MODE_META[m.mode].label}</span>
@@ -618,6 +799,18 @@ export function AIPanel({
                   )}
                   {m.changeSetFiles && m.changeSetFiles.length > 0 && (
                     <ChangeSetCard files={m.changeSetFiles} onOpenFile={onOpenFile} />
+                  )}
+                  {m.commands && m.commands.length > 0 && (
+                    <div className="space-y-1.5">
+                      {m.commands.map((cmd) => (
+                        <CommandCard
+                          key={cmd.commandId}
+                          cmd={cmd}
+                          onRun={() => handleRunCommand(m.id, cmd.commandId, cmd.command)}
+                          onReject={() => handleRejectCommand(m.id, cmd.commandId)}
+                        />
+                      ))}
+                    </div>
                   )}
                   {!m.streaming && (
                     <div className="flex items-center gap-0.5 text-muted-foreground">

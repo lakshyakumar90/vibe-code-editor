@@ -67,6 +67,13 @@ export async function readSSEStream(
         if (typeof id === "string" && id.length > 0) events.onChangeset?.(id, files);
         break;
       }
+      case "run-command": {
+        const d = parsed.data as { commandId?: unknown; command?: unknown };
+        if (typeof d.commandId === "string" && typeof d.command === "string") {
+          events.onRunCommand?.({ commandId: d.commandId, command: d.command });
+        }
+        break;
+      }
       case "error": {
         const m = (parsed.data as { message?: unknown }).message;
         events.onError(typeof m === "string" ? m : "AI request failed");
@@ -117,4 +124,25 @@ export async function postGenerate(
     body: JSON.stringify(body),
     signal,
   });
+}
+
+export interface CommandResultBody {
+  projectId: string;
+  commandId: string;
+  approved: boolean;
+  output?: string;
+  exitCode?: number;
+}
+
+/** Answer the agent's parked runCommand request (approval + execution result). */
+export async function postCommandResult(body: CommandResultBody): Promise<void> {
+  const res = await fetch(`${API_URL}/api/ai/command-result`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Command result failed (http ${res.status})`);
+  }
 }

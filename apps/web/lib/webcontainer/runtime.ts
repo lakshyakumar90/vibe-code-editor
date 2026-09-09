@@ -39,6 +39,33 @@ export interface ShellHandle {
   onExit: Promise<number>;
 }
 
+/**
+ * Minimal shell-like splitter: whitespace-separated, honoring single and
+ * double quotes (no escapes, no operators — one command only).
+ */
+export function splitCommand(command: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (const ch of command.trim()) {
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+    } else if (ch === '"' || ch === "'") {
+      quote = ch;
+    } else if (/\s/.test(ch)) {
+      if (cur) {
+        out.push(cur);
+        cur = "";
+      }
+    } else {
+      cur += ch;
+    }
+  }
+  if (cur) out.push(cur);
+  return out;
+}
+
 async function pipeOutput(
   stream: ReadableStream<string>,
   onOutput?: OutputHandler,
@@ -86,6 +113,43 @@ export class ProjectRuntime {
   async mount(files: ContainerDbFile[]): Promise<void> {
     const container = await this.boot();
     await container.mount(toFileSystemTree(files));
+  }
+
+  /**
+   * Run one agent-approved command non-interactively and capture output.
+   * Command is split on whitespace honoring single/double quotes.
+   * Output capped at ~20k chars. Resolves with the exit code.
+   */
+  async runCommand(
+    command: string,
+    onOutput?: OutputHandler,
+  ): Promise<{ exitCode: number; output: string }> {
+    const container = await this.boot();
+    const [cmd, ...args] = splitCommand(command);
+    if (!cmd) throw new Error("Empty command");
+    const proc = await container.spawn(cmd, args);
+    let output = "";
+    const OUT_CAP = 20000;
+    const collect = (chunk: string) => {
+      if (output.length < OUT_CAP) {
+        output += chunk.slice(0, OUT_CAP - output.length);
+      }
+      onOutput?.(chunk);
+    };
+    const piping = pipeOutput(proc.output, collect);
+    const exitCode = await proc.exit;
+    await piping;
+    return { exitCode, output };
+  }
+
+  /** Read a file from the container FS (null when missing/unreadable). */
+  async readContainerFile(dbPath: string): Promise<string | null> {
+    try {
+      const container = await this.boot();
+      return await container.fs.readFile(normalizeDbPath(dbPath), "utf-8");
+    } catch {
+      return null;
+    }
   }
 
   /** Single npm install. Returns exit code. Only call on boot or package.json change. */

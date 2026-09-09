@@ -21,6 +21,15 @@ export interface ToolStep {
   timestamp: string;
 }
 
+/** Agent-requested terminal command (approval-gated, runs in WebContainer). */
+export interface AgentCommand {
+  commandId: string;
+  command: string;
+  state: "pending" | "running" | "done" | "declined";
+  output?: string;
+  exitCode?: number;
+}
+
 export interface PanelMessage {
   id: string;
   role: "user" | "assistant";
@@ -34,6 +43,8 @@ export interface PanelMessage {
   /** Agent-mode changeset attached to this message (Cursor-style file list). */
   changeSetId?: string;
   changeSetFiles?: string[];
+  /** Agent-requested terminal commands (approval cards, agent mode). */
+  commands?: AgentCommand[];
   feedback?: "up" | "down" | null;
   streaming?: boolean;
 }
@@ -51,6 +62,8 @@ export interface TransportEvents {
   onPlan(plan: PlanTask[]): void;
   /** Agent-mode changeset ready for review (Phase 4). Optional. */
   onChangeset?(changeSetId: string, files?: string[]): void;
+  /** Agent wants to run a terminal command (frontend executes after approval). */
+  onRunCommand?(req: { commandId: string; command: string }): void;
   onDone(): void;
   onError(message: string): void;
 }

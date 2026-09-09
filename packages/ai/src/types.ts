@@ -35,6 +35,16 @@ export interface Attachment {
   code: string;
 }
 
+/** Result of a terminal command run (agent runCommand tool). */
+export interface CommandResult {
+  /** False when the user declined, the run timed out, or was cancelled. */
+  approved: boolean;
+  /** Combined stdout/stderr, truncated by the runner. */
+  output: string;
+  /** Process exit code (-1 when never executed). */
+  exitCode: number;
+}
+
 /** One checklist item in a plan-mode response (Phase 2 renderer). */
 export type PlanTaskStatus = "pending" | "in_progress" | "complete";
 

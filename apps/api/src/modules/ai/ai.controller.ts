@@ -11,11 +11,13 @@ import {
   validateChangeSet,
   type AiProviderId,
   type ChangeSetInput,
+  type CommandResult,
   type GenerateInput,
   type RunStore,
   type WorkspaceReader,
 } from "@repo/ai";
 import {
+  aiCommandResultSchema,
   aiCompleteSchema,
   aiGenerateSchema,
   inlineCompletionResultSchema,
@@ -41,6 +43,58 @@ const ROLE_LEVEL: Record<ProjectRole, number> = {
 };
 
 const orchestrator = new AIOrchestrator();
+
+/**
+ * Terminal rendezvous for the agent runCommand tool. The backend has no
+ * shell — it yields a run-command SSE event and parks here until the
+ * frontend (WebContainer, after user approval) POSTs the result to
+ * POST /api/ai/command-result. Entries expire after 5 minutes.
+ */
+interface PendingCommand {
+  userId: string;
+  projectId: string;
+  resolve: (r: CommandResult) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const pendingCommands = new Map<string, PendingCommand>();
+
+const COMMAND_WAIT_MS = 5 * 60 * 1000;
+
+function waitForCommandResult(
+  commandId: string,
+  userId: string,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<CommandResult> {
+  return new Promise<CommandResult>((resolve) => {
+    const done = (r: CommandResult) => {
+      const entry = pendingCommands.get(commandId);
+      if (entry) {
+        clearTimeout(entry.timer);
+        pendingCommands.delete(commandId);
+      }
+      signal?.removeEventListener("abort", onAbort);
+      resolve(r);
+    };
+    const onAbort = () => {
+      done({ approved: false, output: "Run cancelled.", exitCode: -1 });
+    };
+    if (signal?.aborted) {
+      done({ approved: false, output: "Run cancelled.", exitCode: -1 });
+      return;
+    }
+    const timer = setTimeout(() => {
+      done({
+        approved: false,
+        output: "Timed out waiting for approval (5 minutes).",
+        exitCode: -1,
+      });
+    }, COMMAND_WAIT_MS);
+    pendingCommands.set(commandId, { userId, projectId, resolve: done, timer });
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
 
 function validationError(res: Response, message: string, errors: Array<{ path: string; message: string }>) {
   return res.status(400).json({ success: false, code: "VALIDATION_ERROR", message, errors });
@@ -475,7 +529,14 @@ export const aiController = {
       const stream = orchestrator.generate(
         genInput,
         { userId: user.id, projectRole: actualRole },
-        { files: workspaceFiles, store },
+        {
+          files: workspaceFiles,
+          store,
+          commands: {
+            request: (commandId: string, _command: string, signal?: AbortSignal) =>
+              waitForCommandResult(commandId, user.id, input.projectId, signal),
+          },
+        },
       );
       for await (const event of stream) {
         if (aborted || res.writableEnded) break;
@@ -510,6 +571,43 @@ export const aiController = {
         // already ended
       }
     }
+  },
+
+  /**
+   * Frontend posts an approved/declined terminal command result here,
+   * resolving the orchestrator's parked runCommand request.
+   */
+  async commandResult(req: Request, res: Response) {
+    const parsed = aiCommandResultSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return validationError(
+        res,
+        "Invalid command result",
+        parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+      );
+    }
+    const user = req.user;
+    if (!user?.id) {
+      return res.status(401).json({ success: false, code: "INVALID_USER", message: "Not authenticated" });
+    }
+    const entry = pendingCommands.get(parsed.data.commandId);
+    if (!entry) {
+      return res.status(404).json({
+        success: false,
+        code: "NOT_FOUND",
+        message: "No pending command with that id (expired or already answered)",
+      });
+    }
+    if (entry.userId !== user.id || entry.projectId !== parsed.data.projectId) {
+      return res.status(403).json({ success: false, code: "FORBIDDEN", message: "Not your command" });
+    }
+    const result: CommandResult = {
+      approved: parsed.data.approved,
+      output: (parsed.data.output ?? "").slice(0, 20000),
+      exitCode: parsed.data.exitCode ?? (parsed.data.approved ? 0 : -1),
+    };
+    entry.resolve(result);
+    return res.json({ success: true, data: { ok: true } });
   },
 
   async getChangeSet(req: Request, res: Response) {

@@ -8,6 +8,7 @@ export {
   type ChatMessage,
   type ChatRequest,
   type ChatRole,
+  type CommandResult,
   type AiProvider,
   type FileChange,
   type InlineRequest,
@@ -17,6 +18,7 @@ export {
 export { createProvider, SUPPORTED_PROVIDERS, PROVIDER_MODELS, DEFAULT_PROVIDER, DEFAULT_MODEL, type ProviderMeta } from "./factory";
 export { AIOrchestrator } from "./orchestrator";
 export type {
+  CommandGateway,
   GenerateInput,
   OrchestratorDeps,
   OrchestratorOptions,
@@ -57,6 +59,7 @@ export {
   type AiStreamEvent,
   type ChangeSetEventData,
   type DoneEventData,
+  type RunCommandEventData,
   type ErrorEventData,
   type StatusEventData,
   type TokenEventData,

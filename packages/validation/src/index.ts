@@ -1,6 +1,7 @@
 export {loginSchema, signUpSchema} from "./auth";
 export {
   aiCompleteSchema,
+  aiCommandResultSchema,
   aiGenerateSchema,
   attachmentSchema,
   inlineCompletionResultSchema,

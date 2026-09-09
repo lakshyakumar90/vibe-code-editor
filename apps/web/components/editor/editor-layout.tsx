@@ -108,7 +108,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   editedContentsRef.current = editedContents;
 
   // --- WebContainer / workspace sync (Steps 0+1+6) ---
-  const { runtime, bootAndMount, runBootChain, reinstallAndRestart, status: runtimeStatus } = useRuntime();
+  const { runtime, bootAndMount, runBootChain, reinstallAndRestart, restartDev, status: runtimeStatus } = useRuntime();
   const workspaceRef = useRef<VirtualWorkspace | null>(null);
   const pathToIdRef = useRef<Map<string, string>>(new Map());
   const bootedRef = useRef(false);
@@ -271,6 +271,26 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     setAiAttachments([]);
   }, []);
 
+  /** Reinstall + restart when package.json content actually changed. */
+  const maybeReinstall = useCallback(async (file: ProjectFile, content: string) => {
+    if (file.name !== "package.json" || !startedRef.current) return;
+    const newHash = hashPackageJson(content);
+    if (depHashRef.current && newHash !== depHashRef.current) {
+      depHashRef.current = newHash;
+      toast.info("Dependencies changed — reinstalling…");
+      try {
+        // Runs in the boot terminal (Ctrl+C, reinstall, restart dev);
+        // falls back to detached processes when no boot shell exists.
+        await reinstallAndRestart();
+        toast.success("Dependencies updated");
+      } catch {
+        toast.error("Reinstall failed");
+      }
+    } else {
+      depHashRef.current = newHash;
+    }
+  }, [reinstallAndRestart]);
+
   // Phase 4 — pending agent changeset under review. Files stay untouched
   // (DB + container + models) until per-file Accept; Reject discards.
   const [pendingReview, setPendingReview] = useState<{
@@ -346,6 +366,43 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     [containerWrite, containerRemove, refresh, runtime],
   );
 
+  /**
+   * Run an agent-approved terminal command in the project WebContainer,
+   * then sync the container's package.json back to the DB (npm install
+   * mutates it in the container only, but the DB is truth — without this
+   * later reads and applies would use stale dependency data).
+   */
+  const handleExecuteCommand = useCallback(
+    async (command: string) => {
+      if (!containerReadyRef.current) {
+        throw new Error("Runtime is still starting — wait for boot, then Run again");
+      }
+      const res = await runtime.runCommand(command);
+      try {
+        const containerPkg = await runtime.readContainerFile("package.json");
+        const dbPkg = filesRef.current.find((f) => !f.isFolder && f.path === "package.json");
+        if (containerPkg !== null && dbPkg && containerPkg !== (dbPkg.content ?? "")) {
+          await api.put(`/api/projects/${projectId}/files/${dbPkg.id}`, {
+            content: containerPkg,
+          });
+          await refresh({ silent: true });
+          depHashRef.current = hashPackageJson(containerPkg);
+          toast.success("package.json synced from terminal");
+          try {
+            await restartDev();
+          } catch {
+            toast.error("Preview restart failed — check the terminal tab");
+          }
+        }
+      } catch (e) {
+        if (e instanceof Error && /starting/i.test(e.message)) throw e;
+        toast.error(e instanceof Error ? e.message : "Failed to sync package.json");
+      }
+      return res;
+    },
+    [runtime, projectId, refresh, restartDev],
+  );
+
   const handleAcceptFiles = useCallback(
     async (paths?: string[]) => {
       if (!pendingReview) return;
@@ -353,6 +410,15 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       try {
         const res = await applyChangeSet(pendingReview.changeSetId, paths);
         const fresh = await syncAppliedFiles(res.files, pendingReview.diffs);
+        // Agent changesets can carry dependency changes — same reinstall
+        // path as manual package.json saves (terminal installs already
+        // ran; this covers the direct-edit fallback).
+        const acceptedPkg = pendingReview.diffs.find(
+          (d) => !d.deleted && !d.isFolder && d.path.split("/").pop() === "package.json" && d.newContent !== null,
+        );
+        if (acceptedPkg?.newContent != null) {
+          await maybeReinstall({ name: "package.json" } as ProjectFile, acceptedPkg.newContent);
+        }
         if (res.status === "applied") {
           setPendingReview(null);
           setPreviewPath(null);
@@ -387,7 +453,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
         setReviewBusy(false);
       }
     },
-    [pendingReview, syncAppliedFiles, previewPath, openFiles, handleOpenFile],
+    [pendingReview, syncAppliedFiles, previewPath, openFiles, handleOpenFile, maybeReinstall],
   );
 
   const handleRejectFiles = useCallback(
@@ -470,26 +536,6 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     },
     [handleOpenFile],
   );
-
-  /** Reinstall + restart when package.json content actually changed. */
-  const maybeReinstall = useCallback(async (file: ProjectFile, content: string) => {
-    if (file.name !== "package.json" || !startedRef.current) return;
-    const newHash = hashPackageJson(content);
-    if (depHashRef.current && newHash !== depHashRef.current) {
-      depHashRef.current = newHash;
-      toast.info("Dependencies changed — reinstalling…");
-      try {
-        // Runs in the boot terminal (Ctrl+C, reinstall, restart dev);
-        // falls back to detached processes when no boot shell exists.
-        await reinstallAndRestart();
-        toast.success("Dependencies updated");
-      } catch {
-        toast.error("Reinstall failed");
-      }
-    } else {
-      depHashRef.current = newHash;
-    }
-  }, [reinstallAndRestart]);
 
   const handleSave = useCallback(async () => {
     if (!activeFile) return;
@@ -944,6 +990,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
                 onExternalConsumed={handleAiAttachmentsConsumed}
                 onChangeset={handleChangesetReady}
                 onOpenFile={handleOpenPanelFile}
+                onExecuteCommand={handleExecuteCommand}
               />
             </div>
           </aside>

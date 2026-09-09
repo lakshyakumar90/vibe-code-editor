@@ -59,6 +59,15 @@ export const inlineCompletionResultSchema = z.object({
   completion: z.string().max(20000),
 });
 
+/** Frontend posts the approved/declined terminal command result here. */
+export const aiCommandResultSchema = z.object({
+  projectId: z.string().min(1, "projectId is required"),
+  commandId: z.string().min(1, "commandId is required").max(100),
+  approved: z.boolean(),
+  output: z.string().max(20000).optional(),
+  exitCode: z.number().int().min(-1).max(255).optional(),
+});
+
 export type AiGenerateInput = z.infer<typeof aiGenerateSchema>;
 export type AiCompleteInput = z.infer<typeof aiCompleteSchema>;
 export type AttachmentInput = z.infer<typeof attachmentSchema>;

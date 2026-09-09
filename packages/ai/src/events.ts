@@ -12,6 +12,7 @@ export const AI_EVENT_TYPES = [
   "status",
   "plan",
   "changeset",
+  "run-command",
   "error",
   "done",
 ] as const;
@@ -39,6 +40,12 @@ export interface StatusEventData {
 export interface ChangeSetEventData {
   changeSetId: string;
   files: string[];
+}
+
+/** Agent wants to run a terminal command (frontend executes after approval). */
+export interface RunCommandEventData {
+  commandId: string;
+  command: string;
 }
 
 export interface DoneEventData {

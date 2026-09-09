@@ -38,6 +38,14 @@ router.post(
   aiController.generate,
 );
 
+// Terminal rendezvous for agent runCommand (projectId in body).
+// EDITOR: running commands mutates the project like file edits do.
+router.post(
+  "/command-result",
+  requireAIProjectAccess(ProjectRole.EDITOR),
+  aiController.commandResult,
+);
+
 // ChangeSet review gate (Phase 3+): fetch diffs, apply, reject.
 // Project-scoped via the changeset's projectId; membership is checked
 // in the controller (no projectId in these URLs).
