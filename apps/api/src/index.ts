@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { createServer } from "node:http";
 import express from "express";
 import cookieParser from "cookie-parser";
 import { toNodeHandler } from "better-auth/node";
@@ -7,6 +8,7 @@ import cors from "cors";
 import { projectRouter } from "./modules/projects/project.routes";
 import { aiRouter } from "./modules/ai/ai.routes";
 import { errorHandler } from "./middleware/error.middleware";
+import { attachCollabServer } from "./modules/collab/collab.server";
 const app = express();
 app.use(
   cors({
@@ -35,7 +37,13 @@ app.use("/api/ai", aiRouter);
 
 app.use(errorHandler);
 
-app.listen(process.env.PORT || 5000, () => {
+const server = createServer(app);
+
+// Realtime collaboration (Phase 1: rooms + presence) on /ws/collab.
+// REST and Better Auth routes above are untouched.
+attachCollabServer(server);
+
+server.listen(process.env.PORT || 5000, () => {
   console.log(`Server is running on port ${process.env.PORT || 5000}`);
   console.log(
     `AI provider: ${process.env["AI_PROVIDER"] ?? "ollama (default)"} / model: ${process.env["AI_DEFAULT_MODEL"] || process.env["OLLAMA_MODEL"] || "provider default"}`,

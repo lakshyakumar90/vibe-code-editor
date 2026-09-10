@@ -1,11 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
-import { prisma, ProjectRole } from "@repo/db";
-
-const ROLE_LEVEL: Record<ProjectRole, number> = {
-  [ProjectRole.VIEWER]: 1,
-  [ProjectRole.EDITOR]: 2,
-  [ProjectRole.OWNER]: 3,
-};
+import { ProjectRole } from "@repo/db";
+import { checkProjectAccess } from "../collab/collab.access";
 
 export function requireProjectAccess(
   minimumRole: ProjectRole = ProjectRole.VIEWER,
@@ -31,45 +26,16 @@ export function requireProjectAccess(
         });
       }
 
-      const project = await prisma.project.findUnique({
-        where: {
-          id: projectId,
-        },
-        select: {
-          id: true,
-          ownerId: true,
-        },
-      });
+      const result = await checkProjectAccess(userId, projectId, minimumRole);
 
-      if (!project) {
-        return res.status(404).json({
-          success: false,
-          code: "PROJECT_NOT_FOUND",
-          message: "Project not found",
-        });
-      }
-
-      let role: ProjectRole | null = null;
-
-      if (project.ownerId === userId) {
-        role = ProjectRole.OWNER;
-      } else {
-        const membership = await prisma.projectMember.findUnique({
-          where: {
-            projectId_userId: {
-              projectId,
-              userId,
-            },
-          },
-          select: {
-            role: true,
-          },
-        });
-
-        role = membership?.role || null;
-      }
-
-      if (!role || ROLE_LEVEL[role] < ROLE_LEVEL[minimumRole]) {
+      if (!result.ok) {
+        if (result.code === "PROJECT_NOT_FOUND") {
+          return res.status(404).json({
+            success: false,
+            code: "PROJECT_NOT_FOUND",
+            message: "Project not found",
+          });
+        }
         return res.status(403).json({
           success: false,
           code: "INSUFFICIENT_PERMISSIONS",
@@ -80,7 +46,7 @@ export function requireProjectAccess(
       res.locals.projectAccess = {
         projectId,
         userId,
-        role,
+        role: result.role,
       };
 
       next();

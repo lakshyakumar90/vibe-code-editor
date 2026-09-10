@@ -1,6 +1,6 @@
 import "./types";
-import { auth } from "./auth";
 import type { Request, Response, NextFunction } from "express";
+import { resolveSessionFromHeaders } from "./session";
 
 export async function authenticate(
   req: Request,
@@ -8,9 +8,9 @@ export async function authenticate(
   next: NextFunction
 ) {
   try {
-    const session = await auth.api.getSession({
-      headers: req.headers as HeadersInit
-    });
+    const session = await resolveSessionFromHeaders(
+      req.headers as Record<string, string | string[] | undefined>,
+    );
     if (!session) {
       return res.status(401).json({ message: "Unauthorized" });
     }
