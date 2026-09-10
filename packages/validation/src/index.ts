@@ -3,6 +3,7 @@ export {
   aiCompleteSchema,
   aiCommandResultSchema,
   aiGenerateSchema,
+  aiVerifyResultSchema,
   attachmentSchema,
   inlineCompletionResultSchema,
   type AiCompleteInput,

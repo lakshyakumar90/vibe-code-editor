@@ -50,6 +50,10 @@ export class OllamaProvider implements AiProvider {
         // Agent/plan turns carry whole files + long changesets — the 4k
         // default context truncates mid-JSON (unclosed-fence). No output cap:
         // truncating here is what strands the changeset fence.
+        // think: false — chain-of-thought streams in message.thinking,
+        // which this client drops, so a thinking model looks stalled for
+        // minutes (keepalives only). Ignored by non-thinking models.
+        think: false,
         options: {
           num_ctx: 8192,
           ...(req.temperature !== undefined ? { temperature: req.temperature } : {}),

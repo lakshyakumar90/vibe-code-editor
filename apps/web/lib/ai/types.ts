@@ -30,6 +30,24 @@ export interface AgentCommand {
   exitCode?: number;
 }
 
+/** One file in a build verification candidate. */
+export interface VerifyFile {
+  path: string;
+  content: string | null;
+  delete?: boolean;
+  isFolder?: boolean;
+}
+
+/** Agent-requested build verification (approval-gated, temp-applied). */
+export interface AgentVerification {
+  verificationId: string;
+  files: VerifyFile[];
+  state: "pending" | "running" | "done" | "declined";
+  command?: string;
+  output?: string;
+  exitCode?: number;
+}
+
 export interface PanelMessage {
   id: string;
   role: "user" | "assistant";
@@ -45,6 +63,8 @@ export interface PanelMessage {
   changeSetFiles?: string[];
   /** Agent-requested terminal commands (approval cards, agent mode). */
   commands?: AgentCommand[];
+  /** Agent-requested build verifications (approval cards, agent mode). */
+  verifications?: AgentVerification[];
   feedback?: "up" | "down" | null;
   streaming?: boolean;
 }
@@ -64,6 +84,8 @@ export interface TransportEvents {
   onChangeset?(changeSetId: string, files?: string[]): void;
   /** Agent wants to run a terminal command (frontend executes after approval). */
   onRunCommand?(req: { commandId: string; command: string }): void;
+  /** Agent wants a build verification (frontend temp-applies after approval). */
+  onVerifyBuild?(req: { verificationId: string; files: VerifyFile[] }): void;
   onDone(): void;
   onError(message: string): void;
 }

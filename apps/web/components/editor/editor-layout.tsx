@@ -33,6 +33,7 @@ import { X, Circle, Search, ChevronRight, PanelLeftClose, PanelLeftOpen, Check, 
 import type { Attachment } from "@repo/ai";
 import type { AskAISelection } from "./code-editor";
 import { applyChangeSet, fetchChangeSet, rejectChangeSet, type FileDiff } from "@/lib/ai/diff";
+import type { VerifyFile } from "@/lib/ai/types";
 
 interface EditorLayoutProps {
   projectId: string;
@@ -401,6 +402,71 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       return res;
     },
     [runtime, projectId, refresh, restartDev],
+  );
+
+  /**
+   * Build verification for an agent changeset: temp-apply candidate files to
+   * the container, run the template build, then restore the container to DB
+   * truth. Nothing is written to the DB here — review/apply still gates all
+   * real changes. The preview may flicker while candidates are applied.
+   */
+  const handleVerifyBuild = useCallback(
+    async (files: VerifyFile[]) => {
+      if (!containerReadyRef.current) {
+        throw new Error("Runtime is still starting — wait for boot, then Run again");
+      }
+      const command = runtime.buildCommand().join(" ");
+      const dbFiles = filesRef.current.filter((f) => !f.isFolder);
+      const dbPaths = new Set(filesRef.current.map((f) => f.path));
+      // Snapshot every DB file the candidate touches (equality or below a
+      // candidate path) so restore is exact.
+      const snapshot = new Map<string, string | null>();
+      for (const f of dbFiles) {
+        if (files.some((c) => f.path === c.path || f.path.startsWith(`${c.path}/`))) {
+          snapshot.set(f.path, await runtime.readContainerFile(f.path));
+        }
+      }
+      const restore = async () => {
+        for (const [path, content] of snapshot) {
+          try {
+            if (content === null) await runtime.rm(path);
+            else await runtime.writeFile(path, content);
+          } catch {
+            // best-effort — container already warned on real failures
+          }
+        }
+        for (const c of files) {
+          try {
+            if (c.isFolder) {
+              if (!c.delete && !dbPaths.has(c.path)) await runtime.rm(c.path);
+            } else if (!snapshot.has(c.path)) {
+              await runtime.rm(c.path);
+            }
+          } catch {
+            // best-effort cleanup
+          }
+        }
+      };
+      try {
+        for (const c of files) {
+          if (c.isFolder) {
+            if (c.delete) await runtime.rm(c.path);
+            else await runtime.mkdir(c.path);
+          } else if (c.delete || c.content === null) {
+            await runtime.rm(c.path);
+          } else {
+            await runtime.writeFile(c.path, c.content);
+          }
+        }
+        const res = await runtime.runCommand(command);
+        if (res.exitCode === 0) toast.success("Build passed");
+        else toast.error(`Build failed (exit ${res.exitCode})`);
+        return { command, output: res.output, exitCode: res.exitCode };
+      } finally {
+        await restore();
+      }
+    },
+    [runtime],
   );
 
   const handleAcceptFiles = useCallback(
@@ -991,6 +1057,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
                 onChangeset={handleChangesetReady}
                 onOpenFile={handleOpenPanelFile}
                 onExecuteCommand={handleExecuteCommand}
+                onVerifyBuild={handleVerifyBuild}
               />
             </div>
           </aside>

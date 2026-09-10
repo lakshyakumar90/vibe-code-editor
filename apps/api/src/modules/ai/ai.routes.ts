@@ -46,6 +46,13 @@ router.post(
   aiController.commandResult,
 );
 
+// Build verification rendezvous for agent changesets (projectId in body).
+router.post(
+  "/verify-result",
+  requireAIProjectAccess(ProjectRole.EDITOR),
+  aiController.verifyResult,
+);
+
 // ChangeSet review gate (Phase 3+): fetch diffs, apply, reject.
 // Project-scoped via the changeset's projectId; membership is checked
 // in the controller (no projectId in these URLs).

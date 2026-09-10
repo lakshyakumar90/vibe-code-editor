@@ -288,6 +288,11 @@ export class ProjectRuntime {
     return TEMPLATE_RUNTIME[this.template].port;
   }
 
+  /** Build verification command for agent changesets (default: npm run build). */
+  buildCommand(): string[] {
+    return TEMPLATE_RUNTIME[this.template].build ?? ["npm", "run", "build"];
+  }
+
   /** Hot path: every keystroke-debounce writes here, never npm install. */
   async writeFile(dbPath: string, content: string): Promise<void> {
     const container = await this.boot();

@@ -7,12 +7,15 @@
  *   \n
  */
 
+import type { FileChange } from "./types";
+
 export const AI_EVENT_TYPES = [
   "token",
   "status",
   "plan",
   "changeset",
   "run-command",
+  "verify-build",
   "error",
   "done",
 ] as const;
@@ -46,6 +49,17 @@ export interface ChangeSetEventData {
 export interface RunCommandEventData {
   commandId: string;
   command: string;
+}
+
+/**
+ * Agent asks for a build verification of a validated changeset candidate.
+ * The frontend temp-applies `files` to the container, runs the template
+ * build, restores, and posts the result — the candidate is only persisted
+ * for review after this round-trip.
+ */
+export interface VerifyBuildEventData {
+  verificationId: string;
+  files: FileChange[];
 }
 
 export interface DoneEventData {

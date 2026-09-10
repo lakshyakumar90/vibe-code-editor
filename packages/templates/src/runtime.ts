@@ -22,6 +22,8 @@ export interface TemplateRuntime {
   start: string[];
   /** container port the dev server listens on (each maps to its own preview URL) */
   port: number;
+  /** build verification command; defaults to ["npm", "run", "build"] when omitted */
+  build?: string[];
 }
 
 export const TEMPLATE_RUNTIME: Record<TemplateId, TemplateRuntime> = {

@@ -45,6 +45,18 @@ export interface CommandResult {
   exitCode: number;
 }
 
+/** Result of a post-changeset build verification run. */
+export interface VerifyResult {
+  /** False when the user declined, the run timed out, or was cancelled. */
+  approved: boolean;
+  /** Build exit code (-1 when never executed). */
+  exitCode: number;
+  /** Combined stdout/stderr, truncated by the runner. */
+  output: string;
+  /** The exact build command that ran (for the record). */
+  command?: string;
+}
+
 /** One checklist item in a plan-mode response (Phase 2 renderer). */
 export type PlanTaskStatus = "pending" | "in_progress" | "complete";
 

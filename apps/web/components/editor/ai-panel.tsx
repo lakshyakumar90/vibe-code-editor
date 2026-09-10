@@ -28,20 +28,22 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { SseTransport } from "@/lib/ai/sse";
-import { postCommandResult } from "@/lib/ai/stream";
+import { postCommandResult, postVerifyResult } from "@/lib/ai/stream";
 import type {
   AgentCommand,
+  AgentVerification,
   AiPanelMode,
   AttachableFile,
   AttachmentChip,
   PanelMessage,
   ToolStep,
+  VerifyFile,
 } from "@/lib/ai/types";
 
 const MODE_META: Record<AiPanelMode, { label: string; hint: string }> = {
   ask: { label: "Ask", hint: "Read-only chat, no file access" },
   plan: { label: "Plan", hint: "Read-only plan as a checklist, no writes" },
-  agent: { label: "Agent", hint: "Reads files, edits via reviewable changesets" },
+  agent: { label: "Agent", hint: "Runs commands, verifies builds, edits via reviewable changesets" },
 };
 
 let messageSeq = 0;
@@ -404,6 +406,98 @@ function CommandCard({
   );
 }
 
+/**
+ * Approval card for an agent-requested build verification. Run temp-applies
+ * the candidate files, builds, and restores the container; Reject skips the
+ * check (changeset still goes to review, flagged as unverified).
+ */
+function VerificationCard({
+  item,
+  onRun,
+  onReject,
+}: {
+  item: AgentVerification;
+  onRun: () => void;
+  onReject: () => void;
+}) {
+  const [showOutput, setShowOutput] = useState(false);
+  return (
+    <div className="rounded-lg border bg-muted/30">
+      <div className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-xs">
+        <Check className="size-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate">
+          <span className="font-medium">Build check</span>
+          <span className="text-muted-foreground">
+            {" "}
+            — {item.files.length} file{item.files.length === 1 ? "" : "s"}
+            {item.command ? ` · ${item.command}` : ""}
+          </span>
+        </span>
+        {item.state === "pending" && (
+          <>
+            <button
+              onClick={onRun}
+              className="flex shrink-0 items-center gap-1 rounded bg-primary px-2 py-0.5 text-primary-foreground hover:bg-primary/90"
+              title="Temp-apply files and run the build"
+            >
+              <Play className="size-3" />
+              Run build
+            </button>
+            <button
+              onClick={onReject}
+              className="shrink-0 rounded border px-2 py-0.5 hover:bg-accent"
+              title="Skip the build check"
+            >
+              Skip
+            </button>
+          </>
+        )}
+        {item.state === "running" && (
+          <span className="flex shrink-0 items-center gap-1 text-muted-foreground">
+            <Loader2 className="size-3 animate-spin" />
+            Building…
+          </span>
+        )}
+        {item.state === "done" && (
+          <span
+            className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+              item.exitCode === 0
+                ? "bg-green-500/15 text-green-500"
+                : "bg-red-500/15 text-red-500"
+            }`}
+          >
+            {item.exitCode === 0 ? "passed" : `exit ${item.exitCode ?? "?"}`}
+          </span>
+        )}
+        {item.state === "declined" && (
+          <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+            skipped
+          </span>
+        )}
+      </div>
+      {item.state === "done" && item.output && (
+        <div className="border-t px-2 py-1.5">
+          <button
+            onClick={() => setShowOutput((v) => !v)}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            aria-expanded={showOutput}
+          >
+            <ChevronDown
+              className={`size-3 transition-transform ${showOutput ? "" : "-rotate-90"}`}
+            />
+            Build output
+          </button>
+          {showOutput && (
+            <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words rounded bg-background p-1.5 font-mono text-[11px] text-muted-foreground">
+              {item.output.slice(0, 4000)}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function AIPanel({
   projectId,
   attachables,
@@ -412,6 +506,7 @@ export function AIPanel({
   onChangeset,
   onOpenFile,
   onExecuteCommand,
+  onVerifyBuild,
 }: {
   projectId: string;
   attachables: AttachableFile[];
@@ -424,6 +519,8 @@ export function AIPanel({
   onOpenFile?: (path: string) => void;
   /** Run an approved agent command in the project terminal. */
   onExecuteCommand?: (command: string) => Promise<{ output: string; exitCode: number }>;
+  /** Temp-apply candidate files, run the template build, restore. */
+  onVerifyBuild?: (files: VerifyFile[]) => Promise<{ command: string; output: string; exitCode: number }>;
 }) {
   const [mode, setMode] = useState<AiPanelMode>("ask");
   const [messages, setMessages] = useState<PanelMessage[]>([]);
@@ -576,6 +673,77 @@ export function AIPanel({
     [answerCommand, setCommandState],
   );
 
+  const setVerificationState = useCallback(
+    (
+      messageId: string,
+      verificationId: string,
+      patch: Partial<AgentVerification> & { state: AgentVerification["state"] },
+    ) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                verifications: (m.verifications ?? []).map((v) =>
+                  v.verificationId === verificationId ? { ...v, ...patch } : v,
+                ),
+              }
+            : m,
+        ),
+      );
+    },
+    [],
+  );
+
+  /** Answer the backend's parked verify-build request (approval + outcome). */
+  const answerVerification = useCallback(
+    async (
+      verificationId: string,
+      approved: boolean,
+      output = "",
+      exitCode = -1,
+      command?: string,
+    ) => {
+      try {
+        await postVerifyResult({ projectId, verificationId, approved, output, exitCode, command });
+      } catch {
+        // Backend already moved on (timeout/abort) — card state still updates.
+      }
+    },
+    [projectId],
+  );
+
+  const handleVerifyRun = useCallback(
+    async (messageId: string, verificationId: string, files: VerifyFile[]) => {
+      setVerificationState(messageId, verificationId, { state: "running" });
+      setStatus("Verifying build…");
+      try {
+        if (!onVerifyBuild) throw new Error("Terminal is not available in this session");
+        const res = await onVerifyBuild(files);
+        setVerificationState(messageId, verificationId, {
+          state: "done",
+          command: res.command,
+          output: res.output,
+          exitCode: res.exitCode,
+        });
+        await answerVerification(verificationId, true, res.output, res.exitCode, res.command);
+      } catch (e) {
+        const output = e instanceof Error ? e.message : "Verification failed to run";
+        setVerificationState(messageId, verificationId, { state: "done", output, exitCode: -1 });
+        await answerVerification(verificationId, true, output, -1);
+      }
+    },
+    [answerVerification, onVerifyBuild, setVerificationState],
+  );
+
+  const handleVerifyReject = useCallback(
+    async (messageId: string, verificationId: string) => {
+      setVerificationState(messageId, verificationId, { state: "declined" });
+      await answerVerification(verificationId, false, "Skipped by user.", -1);
+    },
+    [answerVerification, setVerificationState],
+  );
+
   const handleStop = useCallback(() => {
     transportRef.current?.abort();
     setStreaming(false);
@@ -590,6 +758,11 @@ export function AIPanel({
                 c.state === "pending" || c.state === "running"
                   ? { ...c, state: "declined" as const }
                   : c,
+              ),
+              verifications: (m.verifications ?? []).map((v) =>
+                v.state === "pending" || v.state === "running"
+                  ? { ...v, state: "declined" as const }
+                  : v,
               ),
             }
           : m,
@@ -710,6 +883,22 @@ export function AIPanel({
             ),
           );
         },
+        onVerifyBuild: ({ verificationId, files }) => {
+          setStatus("Agent wants to verify the build");
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId
+                ? {
+                    ...m,
+                    verifications: [
+                      ...(m.verifications ?? []),
+                      { verificationId, files, state: "pending" as const },
+                    ],
+                  }
+                : m,
+            ),
+          );
+        },
         onDone: () => {
           setStreaming(false);
           streamingIdRef.current = null;
@@ -770,7 +959,7 @@ export function AIPanel({
                 </div>
               ) : (
                 <div key={m.id} className="space-y-2">
-                  {m.mode && (m.streaming || stripAgentBlocks(m.content) !== "" || m.plan || (m.steps && m.steps.length > 0) || (m.changeSetFiles && m.changeSetFiles.length > 0) || (m.commands && m.commands.length > 0)) && (
+                  {m.mode && (m.streaming || stripAgentBlocks(m.content) !== "" || m.plan || (m.steps && m.steps.length > 0) || (m.changeSetFiles && m.changeSetFiles.length > 0) || (m.commands && m.commands.length > 0) || (m.verifications && m.verifications.length > 0)) && (
                     <div className="flex items-center gap-1.5 text-[13px] text-muted-foreground">
                       <Bot className="size-3.5" />
                       <span>{m.streaming ? (status ?? "Thinking…") : MODE_META[m.mode].label}</span>
@@ -808,6 +997,18 @@ export function AIPanel({
                           cmd={cmd}
                           onRun={() => handleRunCommand(m.id, cmd.commandId, cmd.command)}
                           onReject={() => handleRejectCommand(m.id, cmd.commandId)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {m.verifications && m.verifications.length > 0 && (
+                    <div className="space-y-1.5">
+                      {m.verifications.map((v) => (
+                        <VerificationCard
+                          key={v.verificationId}
+                          item={v}
+                          onRun={() => handleVerifyRun(m.id, v.verificationId, v.files)}
+                          onReject={() => handleVerifyReject(m.id, v.verificationId)}
                         />
                       ))}
                     </div>

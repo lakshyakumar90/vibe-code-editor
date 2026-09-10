@@ -74,6 +74,23 @@ export async function readSSEStream(
         }
         break;
       }
+      case "verify-build": {
+        const d = parsed.data as { verificationId?: unknown; files?: unknown };
+        const files = Array.isArray(d.files)
+          ? (d.files as Array<{ path?: unknown; content?: unknown; delete?: unknown; isFolder?: unknown }>)
+              .filter((f) => typeof f?.path === "string")
+              .map((f) => ({
+                path: f.path as string,
+                content: typeof f.content === "string" ? f.content : null,
+                ...(f.delete === true ? { delete: true as const } : {}),
+                ...(f.isFolder === true ? { isFolder: true as const } : {}),
+              }))
+          : [];
+        if (typeof d.verificationId === "string" && d.verificationId.length > 0) {
+          events.onVerifyBuild?.({ verificationId: d.verificationId, files });
+        }
+        break;
+      }
       case "error": {
         const m = (parsed.data as { message?: unknown }).message;
         events.onError(typeof m === "string" ? m : "AI request failed");
@@ -144,5 +161,27 @@ export async function postCommandResult(body: CommandResultBody): Promise<void> 
   });
   if (!res.ok) {
     throw new Error(`Command result failed (http ${res.status})`);
+  }
+}
+
+export interface VerifyResultBody {
+  projectId: string;
+  verificationId: string;
+  approved: boolean;
+  output?: string;
+  exitCode?: number;
+  command?: string;
+}
+
+/** Answer the agent's parked build verification (approval + build outcome). */
+export async function postVerifyResult(body: VerifyResultBody): Promise<void> {
+  const res = await fetch(`${API_URL}/api/ai/verify-result`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    throw new Error(`Verify result failed (http ${res.status})`);
   }
 }

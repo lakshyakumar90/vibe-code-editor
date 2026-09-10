@@ -12,7 +12,9 @@ import {
   type AiProviderId,
   type ChangeSetInput,
   type CommandResult,
+  type FileChange,
   type GenerateInput,
+  type VerifyResult,
   type RunStore,
   type WorkspaceReader,
 } from "@repo/ai";
@@ -20,6 +22,7 @@ import {
   aiCommandResultSchema,
   aiCompleteSchema,
   aiGenerateSchema,
+  aiVerifyResultSchema,
   inlineCompletionResultSchema,
 } from "@repo/validation";
 import { fileRepository } from "../projects/files/file.repository";
@@ -59,6 +62,16 @@ interface PendingCommand {
 
 const pendingCommands = new Map<string, PendingCommand>();
 
+/** Parked build verifications awaiting the frontend's temp-apply+build. */
+interface PendingVerification {
+  userId: string;
+  projectId: string;
+  resolve: (r: VerifyResult) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+const pendingVerifications = new Map<string, PendingVerification>();
+
 const COMMAND_WAIT_MS = 5 * 60 * 1000;
 
 function waitForCommandResult(
@@ -92,6 +105,41 @@ function waitForCommandResult(
       });
     }, COMMAND_WAIT_MS);
     pendingCommands.set(commandId, { userId, projectId, resolve: done, timer });
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+function waitForVerifyResult(
+  verificationId: string,
+  userId: string,
+  projectId: string,
+  signal?: AbortSignal,
+): Promise<VerifyResult> {
+  return new Promise<VerifyResult>((resolve) => {
+    const done = (r: VerifyResult) => {
+      const entry = pendingVerifications.get(verificationId);
+      if (entry) {
+        clearTimeout(entry.timer);
+        pendingVerifications.delete(verificationId);
+      }
+      signal?.removeEventListener("abort", onAbort);
+      resolve(r);
+    };
+    const onAbort = () => {
+      done({ approved: false, exitCode: -1, output: "Verification cancelled." });
+    };
+    if (signal?.aborted) {
+      done({ approved: false, exitCode: -1, output: "Verification cancelled." });
+      return;
+    }
+    const timer = setTimeout(() => {
+      done({
+        approved: false,
+        exitCode: -1,
+        output: "Timed out waiting for build verification (5 minutes).",
+      });
+    }, COMMAND_WAIT_MS);
+    pendingVerifications.set(verificationId, { userId, projectId, resolve: done, timer });
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
@@ -536,6 +584,10 @@ export const aiController = {
             request: (commandId: string, _command: string, signal?: AbortSignal) =>
               waitForCommandResult(commandId, user.id, input.projectId, signal),
           },
+          verify: {
+            request: (verificationId: string, _files: FileChange[], signal?: AbortSignal) =>
+              waitForVerifyResult(verificationId, user.id, input.projectId, signal),
+          },
         },
       );
       for await (const event of stream) {
@@ -605,6 +657,44 @@ export const aiController = {
       approved: parsed.data.approved,
       output: (parsed.data.output ?? "").slice(0, 20000),
       exitCode: parsed.data.exitCode ?? (parsed.data.approved ? 0 : -1),
+    };
+    entry.resolve(result);
+    return res.json({ success: true, data: { ok: true } });
+  },
+
+  /**
+   * Frontend posts the build verification outcome here, resolving the
+   * orchestrator's parked verify-build request.
+   */
+  async verifyResult(req: Request, res: Response) {
+    const parsed = aiVerifyResultSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return validationError(
+        res,
+        "Invalid verification result",
+        parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+      );
+    }
+    const user = req.user;
+    if (!user?.id) {
+      return res.status(401).json({ success: false, code: "INVALID_USER", message: "Not authenticated" });
+    }
+    const entry = pendingVerifications.get(parsed.data.verificationId);
+    if (!entry) {
+      return res.status(404).json({
+        success: false,
+        code: "NOT_FOUND",
+        message: "No pending verification with that id (expired or already answered)",
+      });
+    }
+    if (entry.userId !== user.id || entry.projectId !== parsed.data.projectId) {
+      return res.status(403).json({ success: false, code: "FORBIDDEN", message: "Not your verification" });
+    }
+    const result: VerifyResult = {
+      approved: parsed.data.approved,
+      exitCode: parsed.data.exitCode ?? (parsed.data.approved ? 0 : -1),
+      output: (parsed.data.output ?? "").slice(0, 20000),
+      ...(parsed.data.command ? { command: parsed.data.command } : {}),
     };
     entry.resolve(result);
     return res.json({ success: true, data: { ok: true } });

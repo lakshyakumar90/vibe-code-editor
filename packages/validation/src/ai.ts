@@ -68,6 +68,16 @@ export const aiCommandResultSchema = z.object({
   exitCode: z.number().int().min(-1).max(255).optional(),
 });
 
+/** Frontend posts the build verification outcome here. */
+export const aiVerifyResultSchema = z.object({
+  projectId: z.string().min(1, "projectId is required"),
+  verificationId: z.string().min(1, "verificationId is required").max(100),
+  approved: z.boolean(),
+  output: z.string().max(20000).optional(),
+  exitCode: z.number().int().min(-1).max(255).optional(),
+  command: z.string().max(500).optional(),
+});
+
 export type AiGenerateInput = z.infer<typeof aiGenerateSchema>;
 export type AiCompleteInput = z.infer<typeof aiCompleteSchema>;
 export type AttachmentInput = z.infer<typeof attachmentSchema>;

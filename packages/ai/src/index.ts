@@ -9,6 +9,7 @@ export {
   type ChatRequest,
   type ChatRole,
   type CommandResult,
+  type VerifyResult,
   type AiProvider,
   type FileChange,
   type InlineRequest,
@@ -24,6 +25,7 @@ export type {
   OrchestratorOptions,
   RequestContext,
   RunStore,
+  VerifyGateway,
   WorkspaceReader,
 } from "./orchestrator";
 export {
@@ -60,6 +62,7 @@ export {
   type ChangeSetEventData,
   type DoneEventData,
   type RunCommandEventData,
+  type VerifyBuildEventData,
   type ErrorEventData,
   type StatusEventData,
   type TokenEventData,
