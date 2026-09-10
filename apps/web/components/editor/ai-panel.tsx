@@ -421,6 +421,7 @@ function VerificationCard({
   onReject: () => void;
 }) {
   const [showOutput, setShowOutput] = useState(false);
+  const [showFiles, setShowFiles] = useState(false);
   return (
     <div className="rounded-lg border bg-muted/30">
       <div className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-xs">
@@ -475,6 +476,32 @@ function VerificationCard({
           </span>
         )}
       </div>
+      {item.state === "pending" && item.files.length > 0 && (
+        <div className="border-t px-2 py-1.5">
+          <button
+            onClick={() => setShowFiles((v) => !v)}
+            className="flex items-center gap-1 text-[11px] text-muted-foreground hover:text-foreground"
+            aria-expanded={showFiles}
+          >
+            <ChevronDown
+              className={`size-3 transition-transform ${showFiles ? "" : "-rotate-90"}`}
+            />
+            {item.files.length} file{item.files.length === 1 ? "" : "s"} will be temp-applied
+          </button>
+          {showFiles && (
+            <ul className="mt-1 space-y-0.5">
+              {item.files.map((f) => (
+                <li
+                  key={f.path}
+                  className="truncate font-mono text-[11px] text-muted-foreground"
+                >
+                  {f.path}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {item.state === "done" && item.output && (
         <div className="border-t px-2 py-1.5">
           <button

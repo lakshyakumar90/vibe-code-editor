@@ -461,7 +461,11 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
         const res = await runtime.runCommand(command);
         if (res.exitCode === 0) toast.success("Build passed");
         else toast.error(`Build failed (exit ${res.exitCode})`);
-        return { command, output: res.output, exitCode: res.exitCode };
+        // Manifest first: proves to the agent (and you) the build ran
+        // WITH the candidate files applied — not against stale code.
+        const applied = files.map((c) => c.path).join(", ");
+        const manifest = `[verify] temp-applied ${files.length} file(s) to container (${applied}); ran "${command}"; container restored.`;
+        return { command, output: `${manifest}\n\n${res.output}`, exitCode: res.exitCode };
       } finally {
         await restore();
       }
