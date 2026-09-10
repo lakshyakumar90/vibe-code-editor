@@ -7,6 +7,7 @@ import {
 import type {
   ClientMessage,
   CollabUser,
+  EditorServerMessage,
   Presence,
   PresenceStatus,
   ServerMessage,
@@ -18,6 +19,11 @@ export type CollabConnectionStatus =
   | "open"
   | "reconnecting"
   | "closed";
+
+/** Any inbound server frame (Phase 1 + namespaced Phase 2 messages). */
+export type InboundMessage = ServerMessage | EditorServerMessage;
+
+export type MessageListener = (message: InboundMessage) => void;
 
 export interface CollabClientEvents {
   onStatusChange?: (status: CollabConnectionStatus) => void;
@@ -61,7 +67,7 @@ export function resolveCollabUrl(baseUrl?: string): string {
 }
 
 /**
- * Reusable Phase 1 collaboration client (rooms + presence only).
+ * Reusable collaboration client (Phase 1 rooms + presence, Phase 2 editor).
  *
  * - One instance = one authenticated connection (Better Auth cookies
  *   are sent automatically by the browser WebSocket handshake).
@@ -69,9 +75,10 @@ export function resolveCollabUrl(baseUrl?: string): string {
  *   after every reconnect.
  * - Exponential-backoff reconnect; 401 responses stop retrying
  *   (re-auth is required instead of a hot loop).
- *
- * Phase 1 ships the transport only — no React hook is mounted and
- * nothing here touches Monaco, AI, or terminal code.
+ * - Namespaced frames (`editor.*`, later `ai.*`/`terminal.*`) are
+ *   forwarded to `addMessageListener` subscribers; outbound frames go
+ *   through `sendRaw`. Durability (re-subscribe, update outbox) is the
+ *   owning module's job — see `collab-bridge.tsx`.
  */
 export class CollabClient {
   private ws: WebSocket | null = null;
@@ -84,6 +91,7 @@ export class CollabClient {
   private closedByUser = false;
   private connectionId: string | null = null;
   private selfUser: CollabUser | null = null;
+  private messageListeners = new Set<MessageListener>();
 
   constructor(
     private events: CollabClientEvents = {},
@@ -98,8 +106,24 @@ export class CollabClient {
     return this.connectionId;
   }
 
+  /** Server-derived identity for this connection (null until ready). */
+  get currentUser(): CollabUser | null {
+    return this.selfUser;
+  }
+
   get joinedProjects(): string[] {
     return [...this.joined];
+  }
+
+  /**
+   * Subscribe to inbound frames not handled by the Phase 1 core
+   * (e.g. `editor.*`). Returns an unsubscribe function.
+   */
+  addMessageListener(listener: MessageListener): () => void {
+    this.messageListeners.add(listener);
+    return () => {
+      this.messageListeners.delete(listener);
+    };
   }
 
   connect(): void {
@@ -222,6 +246,15 @@ export class CollabClient {
   }
 
   private send(message: ClientMessage): void {
+    this.sendRaw(message);
+  }
+
+  /**
+   * Send any protocol frame (Phase 1 or namespaced Phase 2). Dropped
+   * when the socket is not open — callers that need durability (doc
+   * subscriptions, Yjs updates) must track and re-send on reconnect.
+   */
+  sendRaw(message: ClientMessage | object): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message));
     }
@@ -230,10 +263,18 @@ export class CollabClient {
   }
 
   private handleMessage(raw: unknown): void {
-    let message: ServerMessage;
+    let message: InboundMessage;
     try {
-      message = JSON.parse(String(raw)) as ServerMessage;
+      message = JSON.parse(String(raw)) as InboundMessage;
     } catch {
+      this.events.onError?.("Malformed server message", "MALFORMED");
+      return;
+    }
+
+    if (
+      typeof (message as { type?: unknown }).type !== "string" ||
+      (message as { type: unknown }).type === null
+    ) {
       this.events.onError?.("Malformed server message", "MALFORMED");
       return;
     }
@@ -287,6 +328,17 @@ export class CollabClient {
           this.setStatus("closed");
         }
         this.events.onError?.(message.message, message.code);
+        break;
+      default:
+        // Namespaced frames (editor.*, future ai.*, terminal.*) go to
+        // subscribers; unhandled types are ignored, never fatal.
+        for (const listener of [...this.messageListeners]) {
+          try {
+            listener(message);
+          } catch {
+            // Listener failures must not break the socket loop.
+          }
+        }
         break;
     }
   }

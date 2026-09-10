@@ -18,8 +18,8 @@
     "@repo/auth": "workspace:*",
     "@repo/collab": "workspace:*",
     "@repo/db": "workspace:*",
-    "@repo/validation": "workspace:*",
     "@repo/templates": "workspace:*",
+    "@repo/validation": "workspace:*",
     "better-auth": "^1.6.24",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
@@ -32,6 +32,7 @@
     "nanoid": "^6.0.0",
     "uuid": "^14.0.1",
     "ws": "^8.18.0",
+    "yjs": "^13.6.32",
     "zod": "^4.4.3"
   },
   "devDependencies": {

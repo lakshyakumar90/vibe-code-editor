@@ -9,6 +9,7 @@ import type {
   ClientMessage,
   CollabPublisher,
   CollabUser,
+  EditorServerMessage,
   Presence,
   PresenceStatus,
   ServerMessage,
@@ -52,7 +53,8 @@ export interface GatewaySocket {
   on(event: string, cb: (...args: any[]) => void): void;
 }
 
-interface ConnectionState {
+/** Live connection state passed to namespaced (`registerHandler`) handlers. */
+export interface ConnectionState {
   id: string;
   socket: GatewaySocket;
   user: CollabUser;
@@ -61,6 +63,15 @@ interface ConnectionState {
   /** Sliding-window inbound timestamps for rate limiting. */
   hits: number[];
 }
+
+/** Public read-only view of a connection for namespaced handlers. */
+export interface ConnectionInfo {
+  id: string;
+  user: CollabUser;
+}
+
+/** Any outbound frame: Phase 1 core + namespaced (editor.*, …) messages. */
+export type OutboundMessage = ServerMessage | EditorServerMessage;
 
 export type CustomHandler = (
   conn: ConnectionState,
@@ -83,6 +94,9 @@ export class CollabGateway {
   private connections = new Map<string, ConnectionState>();
   private store = new PresenceStore();
   private handlers = new Map<string, CustomHandler>();
+  private closeListeners = new Set<
+    (info: ConnectionInfo) => void | Promise<void>
+  >();
 
   constructor(
     private accessCheck: AccessCheck,
@@ -99,8 +113,46 @@ export class CollabGateway {
     this.handlers.set(type, handler);
   }
 
+  /**
+   * Subscribe to connection teardown (close / stale sweep). Used by
+   * namespaced modules (e.g. editor awareness) to retract ephemeral
+   * state. Returns an unsubscribe function.
+   */
+  onConnectionClosed(
+    listener: (info: ConnectionInfo) => void | Promise<void>,
+  ): () => void {
+    this.closeListeners.add(listener);
+    return () => {
+      this.closeListeners.delete(listener);
+    };
+  }
+
   connectionCount(): number {
     return this.connections.size;
+  }
+
+  /** Whether a connection currently holds a project-room membership. */
+  isRoomMember(connectionId: string, projectId: string): boolean {
+    return this.store.has(connectionId, projectId);
+  }
+
+  /** Server-derived identity for a live connection, if still connected. */
+  getConnectionUser(connectionId: string): CollabUser | undefined {
+    return this.connections.get(connectionId)?.user;
+  }
+
+  /** Direct send for namespaced handlers (respects socket readiness). */
+  sendToConnection(connectionId: string, message: OutboundMessage): void {
+    this.sendTo(connectionId, message);
+  }
+
+  /** Project-room broadcast for namespaced handlers (local + remote fan-out). */
+  broadcastToProject(
+    projectId: string,
+    message: OutboundMessage,
+    exceptConnectionId?: string,
+  ): void {
+    this.sendToProject(projectId, message, exceptConnectionId);
   }
 
   /** Attach a freshly authenticated socket. Sends `connection.ready`. */
@@ -139,7 +191,7 @@ export class CollabGateway {
   /** Entry for cross-instance (Redis) fan-in. Delivers to local members only. */
   handleRemoteMessage(
     projectId: string,
-    message: ServerMessage,
+    message: OutboundMessage,
     exceptConnectionId?: string,
   ): void {
     this.sendToProject(projectId, message, exceptConnectionId, {
@@ -370,9 +422,17 @@ export class CollabGateway {
         userId: conn.user.id,
       });
     }
+    const info: ConnectionInfo = { id: connectionId, user: conn.user };
+    for (const listener of [...this.closeListeners]) {
+      try {
+        void listener(info);
+      } catch {
+        // Listener failures must never break connection teardown.
+      }
+    }
   }
 
-  private sendTo(connectionId: string, message: ServerMessage): void {
+  private sendTo(connectionId: string, message: OutboundMessage): void {
     const conn = this.connections.get(connectionId);
     if (!conn || conn.socket.readyState !== OPEN) {
       return;
@@ -386,7 +446,7 @@ export class CollabGateway {
 
   private sendToProject(
     projectId: string,
-    message: ServerMessage,
+    message: OutboundMessage,
     exceptConnectionId?: string,
     opts: { republish?: boolean } = {},
   ): void {

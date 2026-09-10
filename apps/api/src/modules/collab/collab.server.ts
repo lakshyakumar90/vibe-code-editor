@@ -6,12 +6,16 @@ import { COLLAB_WS_PATH, HEARTBEAT_INTERVAL_MS } from "@repo/collab";
 import { CollabGateway } from "./collab.gateway";
 import type { AccessCheck } from "./collab.gateway";
 import { checkProjectAccess } from "./collab.access";
+import { registerEditorHandlers } from "./collab.editor";
+import type { DocSeeder } from "./collab.editor";
 
 export interface AttachCollabOptions {
   sessionResolver?: (
     headers: Record<string, string | string[] | undefined>,
   ) => Promise<{ id: string; name?: string | null; email?: string | null; image?: string | null } | null>;
   accessCheck?: AccessCheck;
+  /** Override the editor DB seeder (tests inject an in-memory double). */
+  editorSeed?: DocSeeder;
 }
 
 export interface AttachedCollab {
@@ -36,6 +40,13 @@ export function attachCollabServer(
 ): AttachedCollab {
   const gateway = new CollabGateway(
     opts.accessCheck ?? defaultAccessCheck,
+  );
+  // Phase 2: collaborative editing (Yjs updates + awareness) on the same
+  // socket. AI-agent / terminal namespaces stay unregistered.
+  registerEditorHandlers(
+    gateway,
+    opts.accessCheck ?? defaultAccessCheck,
+    opts.editorSeed,
   );
   const wss = new WebSocketServer({ noServer: true });
 

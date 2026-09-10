@@ -10,11 +10,16 @@ import { fetchCompletion } from "@/lib/ai/completion";
 import { readInlineSettings } from "./inline-settings";
 import {
   ensureModel,
+  getModel,
   removeModelByPath,
   initLanguage,
   setSharedEditor,
   setSharedMonaco,
 } from "@/lib/language/model-manager";
+import {
+  getSessionText,
+  isSessionReady,
+} from "@/lib/collab/session-registry";
 
 /** Languages with ghost-text providers registered (see handleMount). */
 const COMPLETION_LANGUAGES = [
@@ -377,6 +382,10 @@ export function CodeEditor({
 
   // Tab switch: swap to the open file's model (created on open).
   // The layout disposes a file's model when its tab closes.
+  // When a Yjs session is READY for the file, the binding owns the model:
+  // React props can lag the live document by a render, so driving setValue
+  // from them here would clobber fresh (often remote) content, yank the
+  // cursor, and broadcast delete-all/insert-all storms. Attach only.
   useEffect(() => {
     if (reviewingRef.current) return;
     const editor = editorRef.current;
@@ -384,12 +393,26 @@ export function CodeEditor({
     if (!editor || !monaco || !file) return;
     if (activePathRef.current !== file.path) {
       activePathRef.current = file.path;
+      if (isSessionReady(projectIdRef.current, file.id)) {
+        const existing = getModel(monaco, file.path);
+        editor.setModel(
+          existing ??
+            ensureModel(
+              monaco,
+              file.path,
+              getSessionText(projectIdRef.current, file.id) ?? value,
+              getLanguage(file.name),
+            ),
+        );
+        return;
+      }
       editor.setModel(
         ensureModel(monaco, file.path, value, getLanguage(file.name)),
       );
     } else {
       const model = editor.getModel();
       if (model && model.getValue() !== value) {
+        if (isSessionReady(projectIdRef.current, file.id)) return;
         model.setValue(value);
       }
     }
@@ -399,6 +422,9 @@ export function CodeEditor({
   // External value sync (e.g. post-save refresh). A full setValue resets
   // the cursor to the file start, so any genuine outside change restores
   // the saved view state right after — typing is never yanked.
+  // Skipped for collaboration-managed files: the Yjs binding is the only
+  // writer there, and this prop routinely lags the live document — writing
+  // it back would revert remote edits and teleport the cursor.
   useEffect(() => {
     if (reviewingRef.current) return;
     const editor = editorRef.current;
@@ -412,6 +438,7 @@ export function CodeEditor({
     ) {
       return;
     }
+    if (isSessionReady(projectIdRef.current, file.id)) return;
     const viewState = editor.saveViewState();
     model.setValue(value);
     if (viewState) {

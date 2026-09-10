@@ -13,6 +13,7 @@ import { createWorkspace, type VirtualWorkspace } from "@/lib/workspace/workspac
 import { buildPathToId } from "@/lib/workspace/file-map";
 import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import { removeModelByPath } from "@/lib/language/model-manager";
+import { CollabBridge, type CollabBridgeHandle } from "./collab-bridge";
 import { BottomPanel } from "./bottom-panel";
 import { AIPanel } from "./ai-panel";
 import { InlineSettingsButton } from "./inline-settings";
@@ -146,7 +147,15 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   );
 
   const activeFile = activeFileId ? openFiles.find((f) => f.id === activeFileId) ?? files.find((f) => f.id === activeFileId) ?? null : null;
-  const activeValue = activeFile ? (editedContents[activeFile.id] ?? activeFile.content ?? "") : "";
+  // Live collaborative content (Yjs) wins over React state when a session
+  // is READY — it is fresher than `editedContents` by up to a render, and
+  // it is the only source that includes remote-only changes. Falls back
+  // to `editedContents` / DB content otherwise.
+  const collabRef = useRef<CollabBridgeHandle | null>(null);
+  const liveContentOf = useCallback((file: ProjectFile): string => {
+    return collabRef.current?.getLiveContent(file.id) ?? editedContents[file.id] ?? file.content ?? "";
+  }, [editedContents]);
+  const activeValue = activeFile ? liveContentOf(activeFile) : "";
   const isActiveDirty = activeFile ? activeValue !== (activeFile.content ?? "") : false;
 
   const pushHistory = useCallback((prev: ProjectFile[]) => {
@@ -344,6 +353,20 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
           await containerRemove(path);
         } else {
           await containerWrite(path, diff.newContent);
+        }
+      }
+      // AI applies enter through the same sync path as typing: push the new
+      // content into the Yjs session (when one exists) so collaborators
+      // converge via normal updates instead of a model setValue bypass.
+      // Files with no local session (or deleted files) are unaffected —
+      // peers holding them converge when they next join from DB truth.
+      for (const path of applied) {
+        const diff = byPath.get(path);
+        const record = filesRef.current.find(
+          (f) => !f.isFolder && f.path === path,
+        );
+        if (diff && !diff.deleted && diff.newContent !== null && record) {
+          collabRef.current?.applyExternalContent(record.id, diff.newContent);
         }
       }
       // Drop stale dirty state first, then refresh once from DB truth
@@ -616,8 +639,11 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
 
   const handleSave = useCallback(async () => {
     if (!activeFile) return;
-    const currentValue = editedContents[activeFile.id];
-    if (currentValue === undefined || currentValue === (activeFile.content ?? "")) {
+    // Live Yjs content first: it includes remote-only changes that may not
+    // have flushed through React state yet. Saving persists the converged
+    // collaborative document — the existing persistence boundary.
+    const currentValue = liveContentOf(activeFile);
+    if (currentValue === (activeFile.content ?? "")) {
       toast.info("No changes to save");
       return;
     }
@@ -649,7 +675,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     } finally {
       setSaving(false);
     }
-  }, [activeFile, editedContents, projectId, refresh, containerWrite, maybeReinstall]);
+  }, [activeFile, liveContentOf, projectId, refresh, containerWrite, maybeReinstall]);
 
   /** Dispose the Monaco model for a closed file (one model per open file). */
   const disposeFileModel = useCallback((file: ProjectFile) => {
@@ -659,6 +685,14 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   /** Discard unsaved edits for the active file (Reset). */
   const handleReset = useCallback(() => {
     if (!activeFile) return;
+    // With an active collaboration session, revert through Yjs so peers
+    // converge on the reverted content instead of diverging silently.
+    if (collabRef.current?.applyExternalContent(activeFile.id, activeFile.content ?? "")) {
+      workspaceRef.current?.updateFile(activeFile.path, activeFile.content ?? "");
+      void containerWrite(activeFile.path, activeFile.content ?? "");
+      toast.info("Reverted to saved content (shared with collaborators)");
+      return;
+    }
     setEditedContents((prev) => {
       if (prev[activeFile.id] === undefined) return prev;
       const next = { ...prev };
@@ -671,7 +705,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   }, [activeFile, containerWrite]);
 
   const requestClose = useCallback((file: ProjectFile) => {
-    const dirty = editedContents[file.id] !== undefined && editedContents[file.id] !== (file.content ?? "");
+    const dirty = liveContentOf(file) !== (file.content ?? "");
     if (dirty) setCloseTarget(file);
     else {
       setOpenFiles((prev) => prev.filter((f) => f.id !== file.id));
@@ -686,12 +720,12 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
         setActiveFileId(remaining.length ? remaining.at(-1)?.id ?? null : null);
       }
     }
-  }, [editedContents, openFiles, activeFileId, disposeFileModel]);
+  }, [liveContentOf, openFiles, activeFileId, disposeFileModel]);
 
   const confirmClose = useCallback(async (shouldSave: boolean) => {
     if (!closeTarget) return;
     if (shouldSave) {
-      const val = editedContents[closeTarget.id];
+      const val = collabRef.current?.getLiveContent(closeTarget.id) ?? editedContents[closeTarget.id];
       if (val !== undefined && val !== (closeTarget.content ?? "")) {
         try {
           setSaving(true);
@@ -760,8 +794,9 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     const oldPath = file.path;
     const parentDir = dirOf(oldPath);
     const newPath = parentDir ? `${parentDir}/${unique}` : unique;
-    // Unsaved edits travel with the rename so the container keeps latest.
-    const currentContent = editedContentsRef.current[file.id] ?? file.content ?? "";
+    // Unsaved edits travel with the rename so the container keeps latest
+    // (live collaborative content first — it is fresher than React state).
+    const currentContent = collabRef.current?.getLiveContent(file.id) ?? editedContentsRef.current[file.id] ?? file.content ?? "";
     const oldSubtree = file.isFolder
       ? filesUnder(filesRef.current, oldPath).map((f) => f.path)
       : [];
@@ -1195,7 +1230,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
           <div className="flex h-9 shrink-0 items-center overflow-x-auto border-b bg-muted/40 scrollbar-thin">
             {openFiles.map((of) => {
               const isActive = of.id === activeFileId;
-              const isDirty = editedContents[of.id] !== undefined && editedContents[of.id] !== (of.content ?? "");
+              const isDirty = liveContentOf(of) !== (of.content ?? "");
               return (
                 <div
                   key={of.id}
@@ -1425,6 +1460,16 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
           })()}
         </div>
         <BottomPanel />
+        {/* Phase 2 collaboration: UI-less session owner (Yjs docs, remote
+            cursors). Models, saving, AI, and runtime behavior unchanged. */}
+        <CollabBridge
+          ref={collabRef}
+          projectId={projectId}
+          openFiles={openFiles}
+          activeFileId={activeFileId}
+          onModelContent={handleContentChange}
+          onSyncError={(message) => toast.error(message)}
+        />
         </div>
       </main>
 

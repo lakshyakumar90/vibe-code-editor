@@ -1,4 +1,8 @@
 import type { ServerMessage } from "./protocol.js";
+import type { EditorServerMessage } from "./editor.js";
+
+/** Any outbound frame: Phase 1 core + namespaced (editor.*, …) messages. */
+export type PublisherMessage = ServerMessage | EditorServerMessage;
 
 /**
  * Seam for future horizontal scaling (Phase 1: local only, no Redis).
@@ -14,7 +18,7 @@ import type { ServerMessage } from "./protocol.js";
  * No protocol or gateway redesign required.
  */
 export interface CollabPublisher {
-  publish(projectId: string, message: ServerMessage): void;
+  publish(projectId: string, message: PublisherMessage): void;
 }
 
 /** No-op publisher used in unit tests. */
@@ -26,10 +30,10 @@ export class NullPublisher implements CollabPublisher {
 
 /** Records published messages — useful for asserting fan-out in tests. */
 export class RecordingPublisher implements CollabPublisher {
-  readonly published: Array<{ projectId: string; message: ServerMessage }> =
+  readonly published: Array<{ projectId: string; message: PublisherMessage }> =
     [];
 
-  publish(projectId: string, message: ServerMessage): void {
+  publish(projectId: string, message: PublisherMessage): void {
     this.published.push({ projectId, message });
   }
 }
