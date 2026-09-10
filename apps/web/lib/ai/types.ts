@@ -67,6 +67,8 @@ export interface PanelMessage {
   verifications?: AgentVerification[];
   feedback?: "up" | "down" | null;
   streaming?: boolean;
+  /** True when generation was cut off by closing the tab mid-stream. */
+  interrupted?: boolean;
 }
 
 /** A file the user may attach via the plus-button. */

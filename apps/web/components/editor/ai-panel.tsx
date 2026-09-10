@@ -16,6 +16,7 @@ import {
   Terminal,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   X,
 } from "lucide-react";
 import type { AiProviderId, Attachment, PlanTask } from "@repo/ai";
@@ -50,6 +51,62 @@ let messageSeq = 0;
 function nextId(prefix: string): string {
   messageSeq += 1;
   return `${prefix}-${Date.now()}-${messageSeq}`;
+}
+
+/**
+ * Chat persistence: the panel unmounts when its tab closes, so messages
+ * live in localStorage per project (restored on reopen/reload). Only plain
+ * data is stored — streaming flags are normalized on load.
+ */
+const CHAT_KEY = (projectId: string) => `vibe.ai-chat.${projectId}`;
+const MAX_STORED_MESSAGES = 100;
+
+function loadStoredChat(projectId: string): PanelMessage[] {
+  try {
+    if (typeof localStorage === "undefined") return [];
+    const raw = localStorage.getItem(CHAT_KEY(projectId));
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return (parsed as PanelMessage[])
+      .filter((m) => m && (m.role === "user" || m.role === "assistant"))
+      .slice(-MAX_STORED_MESSAGES)
+      .map((m) => ({
+        ...m,
+        streaming: false,
+        // Approval cards left pending/running died with the tab — their
+        // backend rendezvous is gone, so Run would spin forever. Settle
+        // them as declined; resend the prompt for fresh cards.
+        commands: (m.commands ?? []).map((c) =>
+          c.state === "pending" || c.state === "running"
+            ? { ...c, state: "declined" as const }
+            : c,
+        ),
+        verifications: (m.verifications ?? []).map((v) =>
+          v.state === "pending" || v.state === "running"
+            ? { ...v, state: "declined" as const }
+            : v,
+        ),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+function storeChat(projectId: string, messages: PanelMessage[]) {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(
+      CHAT_KEY(projectId),
+      JSON.stringify(
+        messages
+          .slice(-MAX_STORED_MESSAGES)
+          .map((m) => ({ ...m, streaming: false })),
+      ),
+    );
+  } catch {
+    // Quota exceeded — chat simply won't persist this session.
+  }
 }
 
 /**
@@ -550,7 +607,7 @@ export function AIPanel({
   onVerifyBuild?: (files: VerifyFile[]) => Promise<{ command: string; output: string; exitCode: number }>;
 }) {
   const [mode, setMode] = useState<AiPanelMode>("ask");
-  const [messages, setMessages] = useState<PanelMessage[]>([]);
+  const [messages, setMessages] = useState<PanelMessage[]>(() => loadStoredChat(projectId));
   const [input, setInput] = useState("");
   const [chips, setChips] = useState<AttachmentChip[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -594,10 +651,46 @@ export function AIPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, streaming, status]);
 
+  // Persist chat so closing/reopening the tab (or reloading) keeps history.
+  useEffect(() => {
+    storeChat(projectId, messages);
+  }, [projectId, messages]);
+
+  // Switching projects loads that project's chat.
+  useEffect(() => {
+    setMessages(loadStoredChat(projectId));
+    setStatus(null);
+    setStreaming(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
+
   useEffect(() => {
     return () => {
       transportRef.current?.abort();
       transportRef.current = null;
+      // Closed mid-stream: mark the partial reply so reopen explains the
+      // abrupt ending instead of looking merely "stopped".
+      const streamingId = streamingIdRef.current;
+      streamingIdRef.current = null;
+      if (streamingId) {
+        try {
+          if (typeof localStorage === "undefined") return;
+          const pid = projectIdRef.current;
+          const raw = localStorage.getItem(CHAT_KEY(pid));
+          if (!raw) return;
+          const parsed: unknown = JSON.parse(raw);
+          if (!Array.isArray(parsed)) return;
+          const updated = (parsed as PanelMessage[]).map((m) =>
+            m.id === streamingId ? { ...m, streaming: false, interrupted: true } : m,
+          );
+          localStorage.setItem(CHAT_KEY(pid), JSON.stringify(updated));
+        } catch {
+          // persistence is best-effort
+        }
+      }
     };
   }, []);
 
@@ -963,6 +1056,26 @@ export function AIPanel({
           {streaming ? (status ?? "Working…") : "Agent"}
         </span>
         {streaming && <Loader2 className="size-3 animate-spin text-muted-foreground" />}
+        {!streaming && messages.length > 0 && (
+          <button
+            onClick={() => {
+              setMessages([]);
+              setStatus(null);
+              try {
+                if (typeof localStorage !== "undefined") {
+                  localStorage.removeItem(CHAT_KEY(projectId));
+                }
+              } catch {
+                // nothing to clear
+              }
+            }}
+            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+            title="Clear chat"
+            aria-label="Clear chat"
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        )}
       </div>
 
       {/* Messages — full-width rows like Bolt */}
@@ -1038,6 +1151,11 @@ export function AIPanel({
                           onReject={() => handleVerifyReject(m.id, v.verificationId)}
                         />
                       ))}
+                    </div>
+                  )}
+                  {m.interrupted && !m.streaming && (
+                    <div className="text-[11px] italic text-muted-foreground">
+                      Stopped when the tab was closed — resend to continue.
                     </div>
                   )}
                   {!m.streaming && (

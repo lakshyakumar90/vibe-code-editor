@@ -1027,14 +1027,14 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
 
   return (
     <div className="flex h-full w-full overflow-hidden">
-      {/* Left agent rail — fully unmounted when collapsed (no stub bar).
-          Reopen via the Agent buttons in the view bar below the navbar. */}
-      {!aiCollapsed && (
-        <>
-          <aside
-            style={{ width: aiWidth }}
-            className="flex shrink-0 flex-col overflow-hidden border-r bg-background"
-          >
+      {/* Left agent rail — kept mounted while collapsed (hidden) so live
+          runs, streams, and approvals survive closing the tab. Reopen via
+          the Agent buttons in the view bar below the navbar. */}
+      <>
+        <aside
+          style={{ width: aiWidth }}
+          className={`shrink-0 flex-col overflow-hidden border-r bg-background ${aiCollapsed ? "hidden" : "flex"}`}
+        >
             <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
               <span className="px-1 text-sm font-bold italic tracking-tight">vibe</span>
               <span className="flex-1" />
@@ -1079,10 +1079,9 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
               document.addEventListener("mousemove", move);
               document.addEventListener("mouseup", up);
             }}
-            className="w-1 shrink-0 cursor-col-resize transition-colors hover:bg-primary/20"
+            className={`w-1 shrink-0 cursor-col-resize transition-colors hover:bg-primary/20 ${aiCollapsed ? "hidden" : ""}`}
           />
         </>
-      )}
       {view === "code" && !sidebarCollapsed && (
         <>
           <aside
