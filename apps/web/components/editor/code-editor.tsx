@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Editor, { DiffEditor, type OnMount } from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { useTheme } from "next-themes";
@@ -99,6 +99,14 @@ export function CodeEditor({
   void _saving;
   const onAskAIRef = useRef(onAskAI);
   onAskAIRef.current = onAskAI;
+  // Stable change handler: the wrapper re-subscribes onDidChangeModelContent
+  // whenever this identity changes, so an inline arrow would churn the
+  // subscription on every keystroke render.
+  const onChangeRef = useRef(onChange);
+  onChangeRef.current = onChange;
+  const stableOnChange = useCallback((nextValue: string | undefined) => {
+    onChangeRef.current(nextValue ?? "");
+  }, []);
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
   const fileRef = useRef(file);
@@ -388,17 +396,30 @@ export function CodeEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [file?.path]);
 
-  // External value sync (e.g. post-save refresh).
+  // External value sync (e.g. post-save refresh). A full setValue resets
+  // the cursor to the file start, so any genuine outside change restores
+  // the saved view state right after — typing is never yanked.
   useEffect(() => {
     if (reviewingRef.current) return;
-    const model = editorRef.current?.getModel();
+    const editor = editorRef.current;
+    const model = editor?.getModel();
     if (
-      model &&
-      file &&
-      activePathRef.current === file.path &&
-      model.getValue() !== value
+      !editor ||
+      !model ||
+      !file ||
+      activePathRef.current !== file.path ||
+      model.getValue() === value
     ) {
-      model.setValue(value);
+      return;
+    }
+    const viewState = editor.saveViewState();
+    model.setValue(value);
+    if (viewState) {
+      try {
+        editor.restoreViewState(viewState);
+      } catch {
+        // model shape changed drastically — cursor reset is acceptable
+      }
     }
   }, [value, file]);
 
@@ -466,9 +487,7 @@ export function CodeEditor({
         <Editor
           height="100%"
           theme={monacoTheme}
-          onChange={(nextValue) => {
-            onChange(nextValue ?? "");
-          }}
+          onChange={stableOnChange}
           onMount={handleMount}
           options={{
             automaticLayout: true,

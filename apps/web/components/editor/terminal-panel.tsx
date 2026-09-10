@@ -56,7 +56,7 @@ export function TerminalInstance({
   /** Boot/install/dev log chunks mirrored into this shell's scrollback. */
   feedLogs?: string[];
 }) {
-  const { runtime, status, stopDev } = useRuntime();
+  const { runtime, status, stopDev, reset, error } = useRuntime();
   // Ref mirrors: the mount/spawn effects must keep a fixed dep-array size
   // across renders (and HMR swaps) — React throws if it ever changes.
   const stopRef = useRef(stopDev);
@@ -242,9 +242,19 @@ export function TerminalInstance({
       )}
       {status === "error" && (
         <div
-          className={`absolute inset-0 flex items-center justify-center p-4 text-center text-xs text-muted-foreground ${dark ? "bg-[#0c0c0c]/80" : "bg-white/80"}`}
+          className={`absolute inset-0 flex flex-col items-center justify-center gap-2 p-4 text-center text-xs text-muted-foreground ${dark ? "bg-[#0c0c0c]/80" : "bg-white/80"}`}
         >
-          Terminal unavailable — runtime failed to boot.
+          <span>Terminal unavailable — runtime failed to boot.</span>
+          {error && (
+            <span className="max-w-full break-words text-[11px] opacity-80">{error}</span>
+          )}
+          <button
+            onClick={reset}
+            className="mt-1 rounded bg-primary px-3 py-1.5 text-white hover:bg-primary/90"
+            title="Retry boot"
+          >
+            Retry boot
+          </button>
         </div>
       )}
     </div>

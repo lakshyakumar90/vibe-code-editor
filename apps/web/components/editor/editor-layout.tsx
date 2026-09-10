@@ -109,7 +109,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   editedContentsRef.current = editedContents;
 
   // --- WebContainer / workspace sync (Steps 0+1+6) ---
-  const { runtime, bootAndMount, runBootChain, reinstallAndRestart, restartDev, status: runtimeStatus } = useRuntime();
+  const { runtime, bootAndMount, runBootChain, reinstallAndRestart, restartDev, status: runtimeStatus, error: runtimeError } = useRuntime();
   const workspaceRef = useRef<VirtualWorkspace | null>(null);
   const pathToIdRef = useRef<Map<string, string>>(new Map());
   const bootedRef = useRef(false);
@@ -373,10 +373,17 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
    * mutates it in the container only, but the DB is truth — without this
    * later reads and applies would use stale dependency data).
    */
+  const runtimeDownReason = useCallback(() => {
+    if (runtimeStatus === "error") {
+      return `Runtime failed to boot${runtimeError ? `: ${runtimeError}` : ""}. Hit Retry boot in Preview or Terminal, then Run again.`;
+    }
+    return `Runtime is still ${runtimeStatus === "idle" ? "starting" : runtimeStatus} — wait for boot, then Run again.`;
+  }, [runtimeStatus, runtimeError]);
+
   const handleExecuteCommand = useCallback(
     async (command: string) => {
       if (!containerReadyRef.current) {
-        throw new Error("Runtime is still starting — wait for boot, then Run again");
+        throw new Error(runtimeDownReason());
       }
       const res = await runtime.runCommand(command);
       try {
@@ -401,7 +408,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       }
       return res;
     },
-    [runtime, projectId, refresh, restartDev],
+    [runtime, projectId, refresh, restartDev, runtimeDownReason],
   );
 
   /**
@@ -413,7 +420,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   const handleVerifyBuild = useCallback(
     async (files: VerifyFile[]) => {
       if (!containerReadyRef.current) {
-        throw new Error("Runtime is still starting — wait for boot, then Run again");
+        throw new Error(runtimeDownReason());
       }
       const command = runtime.buildCommand().join(" ");
       const dbFiles = filesRef.current.filter((f) => !f.isFolder);
@@ -470,7 +477,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
         await restore();
       }
     },
-    [runtime],
+    [runtime, runtimeDownReason],
   );
 
   const handleAcceptFiles = useCallback(
@@ -623,6 +630,10 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       setFiles((prev) => prev.map((f) => (f.id === activeFile.id ? updated : f)));
       setOpenFiles((prev) => prev.map((f) => (f.id === activeFile.id ? updated : f)));
       setEditedContents((prev) => {
+        // Only clear the dirty flag when nothing newer was typed while the
+        // save was in flight — otherwise the sync effect would clobber the
+        // newer keystrokes with the just-saved (stale) content.
+        if (prev[activeFile.id] !== currentValue) return prev;
         const next = { ...prev };
         delete next[activeFile.id];
         return next;

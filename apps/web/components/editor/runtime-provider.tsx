@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { ProjectRuntime } from "@/lib/webcontainer/runtime";
+import { describeBootFailure, resetWebContainerCache } from "@/lib/webcontainer/client";
 import type { TemplateId } from "@/lib/webcontainer/runtime";
 import { TEMPLATE_RUNTIME } from "@repo/templates/runtime";
 import type {
@@ -79,7 +80,19 @@ export function RuntimeProvider({
       setError(null);
       try {
         setStatus("booting");
-        await runtime.boot();
+        // Boot flakes (CDN/worklet load, resource contention) — retry a few
+        // times with backoff before surfacing. Rejected boots are dropped
+        // from the container cache, so each attempt is a fresh boot.
+        let booted = false;
+        for (let attempt = 1; attempt <= 3 && !booted; attempt += 1) {
+          try {
+            await runtime.boot();
+            booted = true;
+          } catch (e) {
+            if (attempt === 3) throw e;
+            await new Promise((r) => setTimeout(r, 1500 * attempt));
+          }
+        }
         setStatus("mounting");
         await runtime.mount(files);
         runtime.onServerReady((_port, url) => {
@@ -103,7 +116,7 @@ export function RuntimeProvider({
         });
       } catch (e) {
         bootedRef.current = false;
-        setError(e instanceof Error ? e.message : "Boot failed");
+        setError(describeBootFailure(e));
         setStatus("error");
         throw e;
       }
@@ -193,6 +206,9 @@ export function RuntimeProvider({
   }, [runtime]);
 
   const reset = React.useCallback(() => {
+    // Drop any poisoned boot so Retry boot starts clean (only called from
+    // the error state, where the prior attempt already settled).
+    resetWebContainerCache();
     bootedRef.current = false;
     setError(null);
     setPreviewUrl(null);
