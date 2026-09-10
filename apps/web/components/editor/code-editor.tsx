@@ -152,9 +152,26 @@ export function CodeEditor({
     initLanguage(monaco);
     if (file) {
       activePathRef.current = file.path;
-      editor.setModel(
-        ensureModel(monaco, file.path, value, getLanguage(file.name)),
-      );
+      // READY sessions own the model (same guard as the tab-switch and
+      // external-value effects): never drive setValue from props here, or
+      // a remount with lagging props clobbers live content into a
+      // delete-all + insert-all broadcast.
+      if (isSessionReady(projectIdRef.current, file.id)) {
+        const existing = getModel(monaco, file.path);
+        editor.setModel(
+          existing ??
+            ensureModel(
+              monaco,
+              file.path,
+              getSessionText(projectIdRef.current, file.id) ?? value,
+              getLanguage(file.name),
+            ),
+        );
+      } else {
+        editor.setModel(
+          ensureModel(monaco, file.path, value, getLanguage(file.name)),
+        );
+      }
     }
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void onSaveRef.current();
