@@ -98,6 +98,7 @@ export interface SendOptions {
   prompt: string;
   attachments: Attachment[];
   history: ChatMessage[];
+  conversationId?: string;
   provider?: string;
   model?: string;
 }

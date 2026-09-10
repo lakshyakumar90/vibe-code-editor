@@ -14,6 +14,11 @@ router.get("/status", aiController.getStatus);
 router.get("/providers", aiController.listProviders);
 
 // DB-authoritative conversation APIs (Phase 3).
+router.post(
+  "/conversations",
+  requireAIProjectAccess(ProjectRole.VIEWER),
+  aiController.createConversation,
+);
 router.get("/conversations", aiController.listConversations);
 router.get("/conversations/:id", aiController.getConversation);
 router.get(

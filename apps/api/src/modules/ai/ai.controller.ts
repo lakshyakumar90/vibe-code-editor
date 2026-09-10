@@ -21,6 +21,7 @@ import {
 import {
   aiCommandResultSchema,
   aiCompleteSchema,
+  aiCreateConversationSchema,
   aiGenerateSchema,
   aiVerifyResultSchema,
   inlineCompletionResultSchema,
@@ -279,6 +280,39 @@ export const aiController = {
         include: { _count: { select: { messages: true } } },
       });
       return res.json({ success: true, data: convs });
+    } catch (e) {
+      return res.status(500).json({
+        success: false,
+        code: "INTERNAL_ERROR",
+        message: e instanceof Error ? e.message : "Unknown error",
+      });
+    }
+  },
+
+  /** Explicit conversation creation for the history + new-chat flow. */
+  async createConversation(req: Request, res: Response) {
+    const parsed = aiCreateConversationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return validationError(
+        res,
+        "Invalid conversation data",
+        parsed.error.issues.map((i) => ({ path: i.path.join("."), message: i.message })),
+      );
+    }
+    const user = req.user;
+    if (!user?.id) {
+      return res.status(401).json({ success: false, code: "INVALID_USER", message: "Not authenticated" });
+    }
+    try {
+      const conv = await prisma.aIConversation.create({
+        data: {
+          projectId: parsed.data.projectId,
+          userId: user.id,
+          title: parsed.data.title?.slice(0, 120) ?? null,
+          mode: parsed.data.mode ?? "ask",
+        },
+      });
+      return res.json({ success: true, data: conv });
     } catch (e) {
       return res.status(500).json({
         success: false,

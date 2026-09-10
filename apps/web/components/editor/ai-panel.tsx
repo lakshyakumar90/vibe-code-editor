@@ -8,6 +8,7 @@ import {
   ChevronDown,
   CircleDashed,
   FileCode2,
+  History,
   Loader2,
   Mic,
   Play,
@@ -16,7 +17,6 @@ import {
   Terminal,
   ThumbsDown,
   ThumbsUp,
-  Trash2,
   X,
 } from "lucide-react";
 import type { AiProviderId, Attachment, PlanTask } from "@repo/ai";
@@ -30,6 +30,13 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { SseTransport } from "@/lib/ai/sse";
 import { postCommandResult, postVerifyResult } from "@/lib/ai/stream";
+import {
+  createConversation,
+  getConversationMessages,
+  listConversations,
+  type ConversationSummary,
+  type StoredMessage,
+} from "@/lib/ai/conversations";
 import type {
   AgentCommand,
   AgentVerification,
@@ -54,59 +61,75 @@ function nextId(prefix: string): string {
 }
 
 /**
- * Chat persistence: the panel unmounts when its tab closes, so messages
- * live in localStorage per project (restored on reopen/reload). Only plain
- * data is stored — streaming flags are normalized on load.
+ * Chat persistence, two layers:
+ * - Backend conversations are truth (history list, new chat, switching).
+ * - localStorage is instant cache: active conversation id per project, and
+ *   message snapshots per conversation (plus the legacy per-project key,
+ *   adopted once as an unsaved draft for upgraders).
  */
-const CHAT_KEY = (projectId: string) => `vibe.ai-chat.${projectId}`;
+const ACTIVE_KEY = (projectId: string) => `vibe.ai-active-conv.${projectId}`;
+const CHAT_KEY = (id: string) => `vibe.ai-chat.${id}`;
 const MAX_STORED_MESSAGES = 100;
 
-function loadStoredChat(projectId: string): PanelMessage[] {
+function sanitizeMessages(list: PanelMessage[]): PanelMessage[] {
+  return list
+    .filter((m) => m && (m.role === "user" || m.role === "assistant"))
+    .slice(-MAX_STORED_MESSAGES)
+    .map((m) => ({
+      ...m,
+      streaming: false,
+      // Approval cards left pending/running died with the tab — their
+      // backend rendezvous is gone, so Run would spin forever. Settle
+      // them as declined; resend the prompt for fresh cards.
+      commands: (m.commands ?? []).map((c) =>
+        c.state === "pending" || c.state === "running"
+          ? { ...c, state: "declined" as const }
+          : c,
+      ),
+      verifications: (m.verifications ?? []).map((v) =>
+        v.state === "pending" || v.state === "running"
+          ? { ...v, state: "declined" as const }
+          : v,
+      ),
+    }));
+}
+
+function loadRaw(key: string): PanelMessage[] {
   try {
     if (typeof localStorage === "undefined") return [];
-    const raw = localStorage.getItem(CHAT_KEY(projectId));
+    const raw = localStorage.getItem(key);
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return (parsed as PanelMessage[])
-      .filter((m) => m && (m.role === "user" || m.role === "assistant"))
-      .slice(-MAX_STORED_MESSAGES)
-      .map((m) => ({
-        ...m,
-        streaming: false,
-        // Approval cards left pending/running died with the tab — their
-        // backend rendezvous is gone, so Run would spin forever. Settle
-        // them as declined; resend the prompt for fresh cards.
-        commands: (m.commands ?? []).map((c) =>
-          c.state === "pending" || c.state === "running"
-            ? { ...c, state: "declined" as const }
-            : c,
-        ),
-        verifications: (m.verifications ?? []).map((v) =>
-          v.state === "pending" || v.state === "running"
-            ? { ...v, state: "declined" as const }
-            : v,
-        ),
-      }));
+    return parsed as PanelMessage[];
   } catch {
     return [];
   }
 }
 
-function storeChat(projectId: string, messages: PanelMessage[]) {
+function loadThread(projectId: string): { conversationId: string | null; messages: PanelMessage[] } {
   try {
-    if (typeof localStorage === "undefined") return;
-    localStorage.setItem(
-      CHAT_KEY(projectId),
-      JSON.stringify(
-        messages
-          .slice(-MAX_STORED_MESSAGES)
-          .map((m) => ({ ...m, streaming: false })),
-      ),
-    );
+    if (typeof localStorage === "undefined") return { conversationId: null, messages: [] };
+    const active = localStorage.getItem(ACTIVE_KEY(projectId));
+    if (active) {
+      return { conversationId: active, messages: sanitizeMessages(loadRaw(CHAT_KEY(active))) };
+    }
+    // Legacy per-project cache → adopt as an unsaved draft thread.
+    return { conversationId: null, messages: sanitizeMessages(loadRaw(CHAT_KEY(projectId))) };
   } catch {
-    // Quota exceeded — chat simply won't persist this session.
+    return { conversationId: null, messages: [] };
   }
+}
+
+function storedToPanel(list: StoredMessage[], mode?: AiPanelMode): PanelMessage[] {
+  return list
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m, i) => ({
+      id: `hist-${m.id}-${i}`,
+      role: m.role as "user" | "assistant",
+      content: m.content,
+      ...(m.role === "assistant" && mode ? { mode } : {}),
+    }));
 }
 
 /**
@@ -607,7 +630,12 @@ export function AIPanel({
   onVerifyBuild?: (files: VerifyFile[]) => Promise<{ command: string; output: string; exitCode: number }>;
 }) {
   const [mode, setMode] = useState<AiPanelMode>("ask");
-  const [messages, setMessages] = useState<PanelMessage[]>(() => loadStoredChat(projectId));
+  const [thread] = useState(() => loadThread(projectId));
+  const [messages, setMessages] = useState<PanelMessage[]>(thread.messages);
+  const [conversationId, setConversationId] = useState<string | null>(thread.conversationId);
+  const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [input, setInput] = useState("");
   const [chips, setChips] = useState<AttachmentChip[]>([]);
   const [status, setStatus] = useState<string | null>(null);
@@ -651,16 +679,67 @@ export function AIPanel({
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages, streaming, status]);
 
-  // Persist chat so closing/reopening the tab (or reloading) keeps history.
+  // Persist active conversation + message cache (instant reopen paint).
   useEffect(() => {
-    storeChat(projectId, messages);
-  }, [projectId, messages]);
+    try {
+      if (typeof localStorage === "undefined") return;
+      if (conversationId) {
+        localStorage.setItem(ACTIVE_KEY(projectId), conversationId);
+        localStorage.setItem(
+          CHAT_KEY(conversationId),
+          JSON.stringify(messages.slice(-MAX_STORED_MESSAGES).map((m) => ({ ...m, streaming: false }))),
+        );
+        localStorage.removeItem(CHAT_KEY(projectId)); // legacy per-project key
+      } else {
+        localStorage.setItem(
+          CHAT_KEY(projectId),
+          JSON.stringify(messages.slice(-MAX_STORED_MESSAGES).map((m) => ({ ...m, streaming: false }))),
+        );
+        localStorage.removeItem(ACTIVE_KEY(projectId));
+      }
+    } catch {
+      // Quota exceeded — backend history still works.
+    }
+  }, [projectId, conversationId, messages]);
 
-  // Switching projects loads that project's chat.
+  const refreshConversations = useCallback(async () => {
+    try {
+      setConversations(await listConversations(projectId));
+    } catch {
+      // History panel simply stays as-is when offline.
+    }
+  }, [projectId]);
+
+  // Mount / project switch: history list + active thread (cache first,
+  // then server truth for the active conversation).
   useEffect(() => {
-    setMessages(loadStoredChat(projectId));
+    let cancelled = false;
+    const t = loadThread(projectId);
+    setMessages(t.messages);
+    setConversationId(t.conversationId);
     setStatus(null);
     setStreaming(false);
+    setHistoryOpen(false);
+    void (async () => {
+      try {
+        const list = await listConversations(projectId);
+        if (cancelled) return;
+        setConversations(list);
+        if (t.conversationId) {
+          const cid = t.conversationId;
+          const convMode = list.find((c) => c.id === cid)?.mode as AiPanelMode | undefined;
+          const stored = await getConversationMessages(cid);
+          if (cancelled) return;
+          // Don't clobber a live run that started since mounting.
+          setMessages((prev) => (streamingIdRef.current ? prev : storedToPanel(stored, convMode)));
+        }
+      } catch {
+        // Cache stands in when offline.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -717,6 +796,42 @@ export function AIPanel({
       setAttachOpen(false);
     },
     [],
+  );
+
+  const handleNewChat = useCallback(() => {
+    if (streamingIdRef.current) return; // never cut a live run
+    transportRef.current?.abort();
+    setMessages([]);
+    setConversationId(null);
+    setStatus(null);
+    setStreaming(false);
+    setChips([]);
+    setHistoryOpen(false);
+    streamingIdRef.current = null;
+  }, []);
+
+  const handleSelectConversation = useCallback(
+    async (id: string) => {
+      if (id === conversationId || streamingIdRef.current) return;
+      setHistoryOpen(false);
+      setHistoryLoading(true);
+      setStatus("Loading chat…");
+      try {
+        const cached = loadRaw(CHAT_KEY(id));
+        if (cached.length > 0) setMessages(sanitizeMessages(cached));
+        else setMessages([]);
+        setConversationId(id);
+        const convMode = conversations.find((c) => c.id === id)?.mode as AiPanelMode | undefined;
+        const stored = await getConversationMessages(id);
+        setMessages(storedToPanel(stored, convMode));
+        setStatus(null);
+      } catch {
+        setStatus("Failed to load chat");
+      } finally {
+        setHistoryLoading(false);
+      }
+    },
+    [conversationId, conversations],
   );
 
   const setFeedback = useCallback((id: string, value: "up" | "down") => {
@@ -891,10 +1006,27 @@ export function AIPanel({
     streamingIdRef.current = null;
   }, []);
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const prompt = input.trim();
     if (!prompt || streaming) return;
     transportRef.current?.abort();
+    setHistoryOpen(false);
+
+    // First message in a fresh thread → create the backend conversation so
+    // this run (and its history) is stored.
+    let convId = conversationId;
+    if (!convId) {
+      setStatus("Starting new chat…");
+      try {
+        const conv = await createConversation(projectId, prompt.slice(0, 60), mode);
+        convId = conv.id;
+        setConversationId(convId);
+        setConversations((prev) => [conv, ...prev.filter((c) => c.id !== conv.id)]);
+      } catch (e) {
+        setStatus(e instanceof Error ? e.message : "Failed to start chat");
+        return;
+      }
+    }
 
     const userMsg: PanelMessage = {
       id: nextId("msg"),
@@ -934,6 +1066,7 @@ export function AIPanel({
           code,
         })),
         history,
+        conversationId: convId ?? undefined,
         provider,
         model,
       },
@@ -1033,6 +1166,8 @@ export function AIPanel({
               m.id === assistantId ? { ...m, streaming: false } : m,
             ),
           );
+          // Backend saved this run's messages — refresh titles/counts.
+          void refreshConversations();
         },
         onError: (message) => {
           setStreaming(false);
@@ -1046,35 +1181,99 @@ export function AIPanel({
         },
       },
     );
-  }, [input, streaming, messages, mode, chips, projectId, onChangeset, provider, model]);
+  }, [input, streaming, messages, mode, chips, projectId, conversationId, onChangeset, provider, model, refreshConversations]);
 
   return (
     <div className="flex h-full flex-col bg-background">
       {/* Slim status header — mode lives in the composer below */}
-      <div className="flex h-9 shrink-0 items-center gap-1.5 border-b px-3">
-        <span className="flex-1 text-xs text-muted-foreground">
+      <div className="relative flex h-9 shrink-0 items-center gap-1.5 border-b px-3">
+        <span className="flex-1 truncate text-xs text-muted-foreground">
           {streaming ? (status ?? "Working…") : "Agent"}
         </span>
         {streaming && <Loader2 className="size-3 animate-spin text-muted-foreground" />}
-        {!streaming && messages.length > 0 && (
-          <button
-            onClick={() => {
-              setMessages([]);
-              setStatus(null);
-              try {
-                if (typeof localStorage !== "undefined") {
-                  localStorage.removeItem(CHAT_KEY(projectId));
-                }
-              } catch {
-                // nothing to clear
-              }
-            }}
-            className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-            title="Clear chat"
-            aria-label="Clear chat"
-          >
-            <Trash2 className="size-3.5" />
-          </button>
+        {!streaming && (
+          <>
+            <button
+              onClick={() => {
+                setHistoryOpen((v) => !v);
+                if (!historyOpen) void refreshConversations();
+              }}
+              className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="Chat history"
+              aria-label="Chat history"
+              aria-expanded={historyOpen}
+            >
+              <History className="size-3.5" />
+            </button>
+            <button
+              onClick={handleNewChat}
+              className="rounded p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title="New chat"
+              aria-label="New chat"
+            >
+              <Plus className="size-3.5" />
+            </button>
+          </>
+        )}
+        {historyOpen && !streaming && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={() => setHistoryOpen(false)} />
+            <div className="absolute right-2 top-10 z-20 max-h-80 w-72 overflow-y-auto rounded-md border bg-popover p-1 shadow-md">
+              <button
+                onClick={handleNewChat}
+                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs font-medium hover:bg-accent"
+              >
+                <Plus className="size-3.5 shrink-0" />
+                New chat
+              </button>
+              <div className="my-1 border-t" />
+              {historyLoading ? (
+                <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="size-3 animate-spin" />
+                  Loading…
+                </div>
+              ) : conversations.length === 0 ? (
+                <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                  No past chats yet
+                </div>
+              ) : (
+                conversations.map((c) => {
+                  const active = c.id === conversationId;
+                  const when = (() => {
+                    try {
+                      return new Date(c.updatedAt).toLocaleString([], {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      });
+                    } catch {
+                      return "";
+                    }
+                  })();
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => void handleSelectConversation(c.id)}
+                      className={`flex w-full flex-col gap-0.5 rounded px-2 py-1.5 text-left hover:bg-accent ${
+                        active ? "bg-accent/60" : ""
+                      }`}
+                      title={c.title ?? "Untitled chat"}
+                    >
+                      <span className="truncate text-xs font-medium">
+                        {c.title || "Untitled chat"}
+                      </span>
+                      <span className="truncate text-[11px] text-muted-foreground">
+                        {c.mode}
+                        {typeof c._count?.messages === "number" ? ` · ${c._count.messages} msgs` : ""}
+                        {when ? ` · ${when}` : ""}
+                      </span>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          </>
         )}
       </div>
 

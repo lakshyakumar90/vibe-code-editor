@@ -78,6 +78,13 @@ export const aiVerifyResultSchema = z.object({
   command: z.string().max(500).optional(),
 });
 
+/** Create a conversation explicitly (history + new-chat flow). */
+export const aiCreateConversationSchema = z.object({
+  projectId: z.string().min(1, "projectId is required"),
+  title: z.string().max(120).optional(),
+  mode: z.enum(aiModes).optional(),
+});
+
 export type AiGenerateInput = z.infer<typeof aiGenerateSchema>;
 export type AiCompleteInput = z.infer<typeof aiCompleteSchema>;
 export type AttachmentInput = z.infer<typeof attachmentSchema>;
