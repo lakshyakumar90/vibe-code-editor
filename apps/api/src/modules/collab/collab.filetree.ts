@@ -1,4 +1,4 @@
-import { setFileTreeBroadcaster } from "../projects/files/file.events";
+import { setFileContentBroadcaster, setFileTreeBroadcaster } from "../projects/files/file.events";
 import type { CollabGateway } from "./collab.gateway";
 
 /**
@@ -15,6 +15,10 @@ import type { CollabGateway } from "./collab.gateway";
 export function registerFileTreeHandlers(gateway: CollabGateway): void {
   // Wire persistence → project-room broadcast. Never throws into file ops.
   setFileTreeBroadcaster((projectId, message) => {
+    gateway.broadcastToProject(projectId, message as unknown as never);
+  });
+  // Phase 4A file-content hints (git discard) ride the same socket.
+  setFileContentBroadcaster((projectId, message) => {
     gateway.broadcastToProject(projectId, message as unknown as never);
   });
 }

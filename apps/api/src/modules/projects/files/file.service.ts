@@ -1,6 +1,11 @@
 import { prisma } from "@repo/db";
 import { fileRepository } from "./file.repository";
 import { buildFilePath } from "./file.utils";
+import {
+  removePathFromWorktree,
+  syncFileToWorktree,
+  syncPathsToWorktree,
+} from "../../git/git.sync";
 
 /**
  * Resolve Better Auth display names for "last modified by" tracking.
@@ -87,6 +92,9 @@ export const fileService = {
       path,
       ...(input.updatedByUserId ? { updatedByUserId: input.updatedByUserId } : {}),
     });
+    // Phase 4A: mirror into the Git worktree when the project is
+    // git-backed. Best-effort — never breaks the save itself.
+    void syncFileToWorktree(projectId, created.id);
     // Return the row with resolved attribution so the saver's UI can show
     // "Last modified by me" immediately instead of waiting for a refresh.
     const [enriched] = await withUpdatedBy([created]);
@@ -139,13 +147,25 @@ export const fileService = {
       path,
       ...(input.updatedByUserId ? { updatedByUserId: input.updatedByUserId } : {}),
     });
+    // Phase 4A: the save is the persistence boundary — the worktree must
+    // observe it (rename handled below via old-path removal + resync).
+    if (saved.path !== file.path) {
+      void removePathFromWorktree(projectId, file.path);
+    }
+    void syncFileToWorktree(projectId, fileId);
     // Same as create: resolve attribution in the save response itself.
     const [enriched] = await withUpdatedBy([saved]);
     return enriched;
   },
 
   async deleteFile(fileId: string, projectId: string) {
-    return fileRepository.deleteFile(fileId, projectId);
+    const existing = await fileRepository.getFileById(fileId, projectId).catch(() => null);
+    const result = await fileRepository.deleteFile(fileId, projectId);
+    // Phase 4A: mirror the removal (best-effort).
+    if (existing) {
+      void removePathFromWorktree(projectId, existing.path);
+    }
+    return result;
   },
 
   async moveFile(
@@ -154,6 +174,23 @@ export const fileService = {
     newParentId: string | null,
     newName: string,
   ) {
-    return fileRepository.moveFile(projectId, fileId, newParentId, newName);
+    const before = await fileRepository.getFileById(fileId, projectId).catch(() => null);
+    const moved = await fileRepository.moveFile(projectId, fileId, newParentId, newName);
+    // Phase 4A: drop the old worktree subtree, resync the new one.
+    if (before && before.path !== moved.path) {
+      void removePathFromWorktree(projectId, before.path);
+    }
+    void (async () => {
+      try {
+        const all = await fileRepository.getAllFiles(projectId);
+        const ids = all
+          .filter((f) => f.path === moved.path || f.path.startsWith(`${moved.path}/`))
+          .map((f) => f.id);
+        await syncPathsToWorktree(projectId, [moved.id, ...ids]);
+      } catch {
+        // Best-effort only (syncPathsToWorktree already swallows per-file).
+      }
+    })();
+    return moved;
   },
 };

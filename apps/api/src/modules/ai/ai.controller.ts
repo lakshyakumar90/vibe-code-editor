@@ -28,6 +28,7 @@ import {
 } from "@repo/validation";
 import { fileRepository } from "../projects/files/file.repository";
 import { emitFileTreeChanged } from "../projects/files/file.events";
+import { syncPathsToWorktree } from "../git/git.sync";
 
 /**
  * Phase 3: real orchestrator wiring. Mode routes, SSE generate,
@@ -956,6 +957,20 @@ export const aiController = {
         },
       });
       if (applied.length > 0) emitFileTreeChanged(cs.projectId);
+      // Phase 4A: mirror AI-applied files into the Git worktree when the
+      // project is git-backed (AI writes bypass fileService). Best-effort.
+      if (applied.length > 0) {
+        void (async () => {
+          try {
+            const all = await fileRepository.getAllFiles(cs.projectId);
+            const appliedSet = new Set(applied);
+            const ids = all.filter((f) => appliedSet.has(f.path)).map((f) => f.id);
+            await syncPathsToWorktree(cs.projectId, ids);
+          } catch {
+            // Best-effort only.
+          }
+        })();
+      }
       return res.json({
         success: true,
         data: {

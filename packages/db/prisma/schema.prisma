@@ -144,20 +144,28 @@ model GitRepository {
   projectId String  @unique
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
-  githubRepoId String
-  owner        String
-  repo         String
-  fullName     String
+  // Null for local-only repositories (initialized via Source Control on
+  // a project that was never imported from GitHub). GitHub-imported
+  // projects always carry the full binding.
+  githubRepoId String?
+  owner        String?
+  repo         String?
+  fullName     String?
 
   defaultBranch String
   currentBranch String
 
-  importedSha String
+  importedSha String?
 
   private  Boolean @default(false)
   canRead  Boolean @default(false)
   canWrite Boolean @default(false)
   canAdmin Boolean @default(false)
+
+  // Phase 4A: server-side worktree lifecycle. Null until the persistent
+  // Git repository has been bootstrapped from the project's File rows.
+  initializedAt DateTime?
+  lastVerifiedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

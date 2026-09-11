@@ -14,6 +14,8 @@ import { buildPathToId } from "@/lib/workspace/file-map";
 import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
 import { removeModelByPath } from "@/lib/language/model-manager";
 import { CollabBridge, type CollabBridgeHandle } from "./collab-bridge";
+import { SourceControlPanel } from "./source-control-panel";
+import { gitService, type GitDiff } from "@/lib/git/service";
 import { BottomPanel } from "./bottom-panel";
 import { AIPanel } from "./ai-panel";
 import { InlineSettingsButton } from "./inline-settings";
@@ -102,7 +104,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   );
   const [isResizing, setIsResizing] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [leftTab, setLeftTab] = useState<"files" | "search">("files");
+  const [leftTab, setLeftTab] = useState<"files" | "search" | "source">("files");
   const [searchQuery, setSearchQuery] = useState("");
   const filesRef = useRef(files);
   filesRef.current = files;
@@ -222,21 +224,32 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   // of truth and refresh() is change-gated, so a hint for an already-known
   // state is a no-op. The 15s poll above is the backstop for missed hints
   // and reconnects. Contents keep flowing through Yjs untouched.
+  //
+  // Phase 4A: file.content.changed hints (git discard) carry fileIds whose
+  // persisted contents changed outside editors — those funnel through
+  // handleGitFilesChanged (refresh + Yjs apply + container mirror).
   useEffect(() => {
     const onTreeHint = (e: Event) => {
       const detail = (e as CustomEvent).detail as {
         type?: string;
         projectId?: string;
+        fileIds?: string[];
       };
-      if (!detail || detail.type !== "file.tree.changed") return;
-      if (detail.projectId !== projectId) return;
-      void refresh({ silent: true, onlyIfChanged: true }).catch(() => undefined);
+      if (!detail || detail.projectId !== projectId) return;
+      if (detail.type === "file.tree.changed") {
+        void refresh({ silent: true, onlyIfChanged: true }).catch(() => undefined);
+        return;
+      }
+      if (detail.type === "file.content.changed" && Array.isArray(detail.fileIds)) {
+        void handleGitFilesChangedById(detail.fileIds).catch(() => undefined);
+      }
     };
     window.addEventListener("vibe:file-tree", onTreeHint);
     return () => {
       window.removeEventListener("vibe:file-tree", onTreeHint);
     };
-  }, [refresh]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [refresh, projectId]);
 
   // Boot the runtime once files arrive: workspace -> mount, then
   // `npm install && npm run dev` runs in the boot terminal's foreground
@@ -734,6 +747,80 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     }
   }, [activeFile, liveContentOf, projectId, refresh, containerWrite, maybeReinstall]);
 
+  /**
+   * Phase 4A — reconcile externally changed files (git discard): refresh
+   * from DB truth, push new content through Yjs sessions so collaborators
+   * converge (same path as AI applies), mirror into the container, and
+   * drop stale local dirty flags for exactly those files.
+   */
+  const handleGitFilesChanged = useCallback(async (paths: string[]) => {
+    const wanted = new Set(paths);
+    if (wanted.size === 0) return;
+    const arr = await refresh({ silent: true });
+    const affected = arr.filter((f) => !f.isFolder && wanted.has(f.path));
+    for (const record of affected) {
+      const content = record.content ?? "";
+      collabRef.current?.applyExternalContent(record.id, content);
+      if (containerReadyRef.current) {
+        try {
+          workspaceRef.current?.updateFile(record.path, content);
+          await runtime.writeFile(record.path, content);
+        } catch {
+          toast.error("Sync to runtime failed");
+        }
+      } else {
+        workspaceRef.current?.updateFile(record.path, content);
+      }
+    }
+    if (affected.length > 0) {
+      const ids = new Set(affected.map((f) => f.id));
+      setEditedContents((prev) => {
+        const next = { ...prev };
+        ids.forEach((id) => {
+          delete next[id];
+        });
+        return next;
+      });
+    }
+  }, [refresh, runtime]);
+
+  const handleGitFilesChangedById = useCallback(async (fileIds: string[]) => {
+    const wanted = new Set(fileIds);
+    if (wanted.size === 0) return;
+    const arr = await refresh({ silent: true });
+    await handleGitFilesChanged(
+      arr.filter((f) => !f.isFolder && wanted.has(f.id)).map((f) => f.path),
+    );
+  }, [refresh, handleGitFilesChanged]);
+
+  /** Local dirty check for the discard guard's client-side backstop. */
+  const isPathDirty = useCallback((path: string): boolean => {
+    const file = filesRef.current.find((f) => !f.isFolder && f.path === path);
+    if (!file) return false;
+    return liveContentOf(file) !== (file.content ?? "");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editedContents]);
+
+  // Phase 4A — Source Control diff selection rendered in the main pane.
+  const [gitDiffSel, setGitDiffSel] = useState<{ path: string; staged: boolean } | null>(null);
+  const [gitDiff, setGitDiff] = useState<GitDiff | null>(null);
+  const [gitDiffLoading, setGitDiffLoading] = useState(false);
+
+  const handleOpenGitDiff = useCallback(async (path: string, staged: boolean) => {
+    setGitDiffSel({ path, staged });
+    setGitDiff(null);
+    setGitDiffLoading(true);
+    try {
+      const diff = await gitService.getDiff(projectId, path, staged);
+      setGitDiff(diff);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load diff");
+      setGitDiffSel(null);
+    } finally {
+      setGitDiffLoading(false);
+    }
+  }, [projectId]);
+
   /** Dispose the Monaco model for a closed file (one model per open file). */
   const disposeFileModel = useCallback((file: ProjectFile) => {
     removeModelByPath(file.path);
@@ -1204,6 +1291,13 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
               >
                 Search
               </button>
+              <button
+                onClick={() => setLeftTab("source")}
+                className={`flex items-center gap-1.5 rounded px-2 py-1 ${leftTab === "source" ? "bg-accent text-foreground" : "hover:text-foreground"}`}
+                title="Source Control"
+              >
+                Source
+              </button>
               <span className="flex-1" />
               <button
                 onClick={() => setSidebarCollapsed(true)}
@@ -1227,7 +1321,13 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
               </div>
             )}
             <div className="flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
-              {loading ? <div className="p-4 text-sm">Loading files...</div> : (
+              {leftTab === "source" ? (
+                <SourceControlPanel
+                  projectId={projectId}
+                  onOpenDiff={handleOpenGitDiff}
+                  isPathDirty={isPathDirty}
+                />
+              ) : loading ? <div className="p-4 text-sm">Loading files...</div> : (
                 <FileTree
                   projectId={projectId}
                   files={visibleFiles}
@@ -1501,6 +1601,65 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
                         wordWrap: "on",
                       }}
                     />
+                  </div>
+                </div>
+              );
+            }
+            // Phase 4A — Source Control diff selection (read-only).
+            if (gitDiffSel) {
+              return (
+                <div className="flex h-full flex-col">
+                  <div className="flex h-8 shrink-0 items-center justify-between gap-3 border-b bg-muted/30 px-4 text-xs">
+                    <span className="truncate text-muted-foreground">
+                      {gitDiff?.oldPath ? `${gitDiff.oldPath} → ` : ""}
+                      <span className="font-medium text-foreground">{gitDiffSel.path}</span>
+                      <span className="ml-2 rounded bg-accent px-1.5 py-0.5 text-[10px]">
+                        {gitDiffSel.staged ? "Staged vs HEAD" : "Working vs HEAD"}
+                      </span>
+                    </span>
+                    <button
+                      onClick={() => {
+                        setGitDiffSel(null);
+                        setGitDiff(null);
+                      }}
+                      className="rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                      title="Close diff"
+                      aria-label="Close diff"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </div>
+                  <div className="min-h-0 flex-1">
+                    {gitDiffLoading || !gitDiff ? (
+                      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                        Loading diff…
+                      </div>
+                    ) : gitDiff.isBinary ? (
+                      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                        Binary file — diff unavailable.
+                      </div>
+                    ) : gitDiff.tooLarge ? (
+                      <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                        Diff too large to display.
+                      </div>
+                    ) : (
+                      <DiffEditor
+                        height="100%"
+                        theme={monacoTheme}
+                        language={getLanguage(gitDiffSel.path.split("/").pop() ?? gitDiffSel.path)}
+                        original={gitDiff.oldContent ?? ""}
+                        modified={gitDiff.newContent ?? ""}
+                        options={{
+                          automaticLayout: true,
+                          minimap: { enabled: false },
+                          fontSize: 14,
+                          readOnly: true,
+                          renderSideBySide: false,
+                          scrollBeyondLastLine: false,
+                          wordWrap: "on",
+                        }}
+                      />
+                    )}
                   </div>
                 </div>
               );

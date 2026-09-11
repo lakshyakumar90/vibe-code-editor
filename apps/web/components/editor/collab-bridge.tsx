@@ -627,11 +627,14 @@ export const CollabBridge = forwardRef<CollabBridgeHandle, CollabBridgeProps>(
           break;
         }
         default: {
-          // File-tree hints (file.tree.changed) are not editor state —
+          // File-tree / file-content hints are not editor state —
           // forward to the layout via DOM event so the existing socket
           // stays the only connection. Editor sync untouched.
           const t = (message as { type?: string }).type;
-          if (typeof t === "string" && t.startsWith("file.tree.")) {
+          if (
+            typeof t === "string" &&
+            (t.startsWith("file.tree.") || t.startsWith("file.content."))
+          ) {
             try {
               window.dispatchEvent(
                 new CustomEvent("vibe:file-tree", { detail: message }),

@@ -23,6 +23,7 @@ async function request<T>(
   if (!response.ok) {
     let message =
       "Something went wrong";
+    let code: string | undefined;
 
     try {
       const body =
@@ -30,11 +31,21 @@ async function request<T>(
 
       message =
         body.message ?? message;
+      if (typeof body.code === "string") {
+        code = body.code;
+      }
     } catch {
-      throw new Error(message);
+      const err = new Error(message);
+      throw err;
     }
 
-    throw new Error(message);
+    // Phase 4A: preserve stable server error codes (e.g. GIT_NOT_CONNECTED)
+    // so callers can branch on them. Additive — existing catch sites that
+    // read only `.message` are unaffected.
+    const err = new Error(message) as Error & { code?: string; status?: number };
+    if (code) err.code = code;
+    err.status = response.status;
+    throw err;
   }
 
   if (response.status === 204) {

@@ -118,6 +118,21 @@ export class EditorSyncService {
     return this.docs.size;
   }
 
+  /**
+   * Live Y.Doc text for Phase 4A dirty checks. Null when no server doc
+   * exists (file never opened or LRU-evicted — treated as no unsaved
+   * state; the acting client's own dirty check is the backstop).
+   */
+  getDocText(projectId: string, fileId: string): string | null {
+    const doc = this.docs.get(editorDocId(projectId, fileId));
+    if (!doc) return null;
+    try {
+      return doc.getText("content").toString();
+    } catch {
+      return null;
+    }
+  }
+
   // -- join / leave ----------------------------------------------------------
 
   private async handleJoin(
@@ -551,11 +566,24 @@ export class EditorSyncService {
   }
 }
 
+/**
+ * Process-local registry of the live editor service (Phase 4A).
+ * Lets the Git module compare server Y.Doc text against persisted File
+ * rows for the dirty-editor guard. Null in tests / before attach.
+ */
+let activeEditorService: EditorSyncService | null = null;
+
+export function getActiveEditorService(): EditorSyncService | null {
+  return activeEditorService;
+}
+
 /** Attach Phase 2 editor handlers to a gateway. Returns the service. */
 export function registerEditorHandlers(
   gateway: CollabGateway,
   accessCheck: AccessCheck,
   seed?: DocSeeder,
 ): EditorSyncService {
-  return new EditorSyncService(gateway, accessCheck, seed);
+  const service = new EditorSyncService(gateway, accessCheck, seed);
+  activeEditorService = service;
+  return service;
 }

@@ -37,5 +37,9 @@ yarn-error.log*
 .DS_Store
 *.pem
 
+# Phase 4A persistent Git worktrees (server-side, never committed)
+.git-worktrees/
+apps/api/.git-worktrees/
+
 # Scratch upstream starters (not committed, see packages/templates)
 starters/

@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE "git_repository" ALTER COLUMN "githubRepoId" DROP NOT NULL,
+ALTER COLUMN "owner" DROP NOT NULL,
+ALTER COLUMN "repo" DROP NOT NULL,
+ALTER COLUMN "fullName" DROP NOT NULL,
+ALTER COLUMN "importedSha" DROP NOT NULL;
