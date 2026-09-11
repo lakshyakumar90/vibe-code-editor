@@ -38,6 +38,17 @@ export const auth = betterAuth({
       clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
     },
   },
+  account: {
+    accountLinking: {
+      // Allow an already-authenticated IDE user (email/password or Google)
+      // to link a GitHub identity whose primary email differs. Linkage is
+      // server-owned: /link-social requires a valid session, so a client
+      // can never attach a GitHub account to another IDE user.
+      enabled: true,
+      allowDifferentEmails: true,
+      trustedProviders: ["github", "google"],
+    },
+  },
   session: {
     expiresIn: 60 * 60 * 24 * 7, // 7 days
     updateAge: 60 * 60 * 24, // 1 day

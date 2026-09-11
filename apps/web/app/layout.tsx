@@ -5,6 +5,7 @@ import { DM_Sans } from "next/font/google";
 import { cn } from "@/lib/utils";
 import { Navbar } from "@/components/layout/navbar";
 import { ThemeProvider } from "@/components/layout/theme-provider";
+import { Toaster } from "sonner";
 
 const dmSans = DM_Sans({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -38,6 +39,7 @@ export default function RootLayout({
         >
           <Navbar />
           <div className="">{children}</div>
+          <Toaster />
         </ThemeProvider>
       </body>
     </html>

@@ -22,6 +22,8 @@ model User {
   membership ProjectMember[]
   favorites  ProjectFavorite[]
 
+  githubConnection GitHubConnection?
+
   @@unique([email])
   @@map("user")
 }
@@ -72,6 +74,37 @@ model Verification {
 
   @@index([identifier])
   @@map("verification")
+}
+
+// Phase 1 (GitHub connection): product-state metadata for a user's GitHub
+// authorization. NEVER stores raw tokens — the OAuth access token remains
+// owned by Better Auth's Account model. Server derives identity from the
+// session (userId) + GitHub API; client input is never trusted for linkage.
+model GitHubConnection {
+  id           String @id @default(cuid())
+  userId       String @unique
+  user         User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  githubUserId String
+  login        String
+  avatarUrl    String?
+  name         String?
+  email        String?
+
+  // Granted-scope snapshot (e.g. "read:user,user:email,repo"), informational.
+  scope  String?
+  // "connected" | "needs_reconnect"
+  status String @default("connected")
+
+  connectedAt     DateTime @default(now())
+  lastValidatedAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([githubUserId])
+  @@index([userId])
+  @@map("github_connection")
 }
 
 model Project {
