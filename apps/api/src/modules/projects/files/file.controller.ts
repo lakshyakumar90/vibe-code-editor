@@ -7,6 +7,7 @@ import {
 } from "./file.validation";
 import { z } from "zod";
 import { fileService } from "./file.service";
+import { emitFileTreeChanged } from "./file.events";
 
 export const fileController = {
   async listFiles(req: Request, res: Response) {
@@ -78,6 +79,7 @@ export const fileController = {
         ...data,
         ...(req.user?.id ? { updatedByUserId: req.user.id } : {}),
       });
+      emitFileTreeChanged(projectId);
       res.status(201).json(file);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -102,6 +104,7 @@ export const fileController = {
         ...data,
         ...(req.user?.id ? { updatedByUserId: req.user.id } : {}),
       });
+      emitFileTreeChanged(projectId);
       res.json(file);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -122,6 +125,7 @@ export const fileController = {
         return;
       }
       await fileService.deleteFile(fileId, projectId);
+      emitFileTreeChanged(projectId);
       res.status(204).send();
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -148,6 +152,7 @@ export const fileController = {
         data.parentId ?? null,
         data.name,
       );
+      emitFileTreeChanged(projectId);
       res.json(file);
     } catch (error) {
       if (error instanceof z.ZodError) {

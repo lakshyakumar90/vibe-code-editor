@@ -626,8 +626,22 @@ export const CollabBridge = forwardRef<CollabBridgeHandle, CollabBridgeProps>(
           }
           break;
         }
-        default:
+        default: {
+          // File-tree hints (file.tree.changed) are not editor state —
+          // forward to the layout via DOM event so the existing socket
+          // stays the only connection. Editor sync untouched.
+          const t = (message as { type?: string }).type;
+          if (typeof t === "string" && t.startsWith("file.tree.")) {
+            try {
+              window.dispatchEvent(
+                new CustomEvent("vibe:file-tree", { detail: message }),
+              );
+            } catch {
+              // layout falls back to polling
+            }
+          }
           break;
+        }
       }
     };
     const routeInboundRef = useRef(routeInbound);

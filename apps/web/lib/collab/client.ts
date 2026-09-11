@@ -8,6 +8,7 @@ import type {
   ClientMessage,
   CollabUser,
   EditorServerMessage,
+  FileTreeServerMessage,
   Presence,
   PresenceStatus,
   ServerMessage,
@@ -20,8 +21,11 @@ export type CollabConnectionStatus =
   | "reconnecting"
   | "closed";
 
-/** Any inbound server frame (Phase 1 + namespaced Phase 2 messages). */
-export type InboundMessage = ServerMessage | EditorServerMessage;
+/** Any inbound server frame (Phase 1 + namespaced editor / file-tree messages). */
+export type InboundMessage =
+  | ServerMessage
+  | EditorServerMessage
+  | FileTreeServerMessage;
 
 export type MessageListener = (message: InboundMessage) => void;
 

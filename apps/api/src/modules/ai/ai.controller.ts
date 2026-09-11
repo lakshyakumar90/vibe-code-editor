@@ -27,6 +27,7 @@ import {
   inlineCompletionResultSchema,
 } from "@repo/validation";
 import { fileRepository } from "../projects/files/file.repository";
+import { emitFileTreeChanged } from "../projects/files/file.events";
 
 /**
  * Phase 3: real orchestrator wiring. Mode routes, SSE generate,
@@ -954,6 +955,7 @@ export const aiController = {
           ...(fullyApplied ? { resolvedAt: new Date(), resolvedBy: user.id } : {}),
         },
       });
+      if (applied.length > 0) emitFileTreeChanged(cs.projectId);
       return res.json({
         success: true,
         data: {

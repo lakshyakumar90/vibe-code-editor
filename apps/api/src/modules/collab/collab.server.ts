@@ -8,6 +8,7 @@ import type { AccessCheck } from "./collab.gateway";
 import { checkProjectAccess } from "./collab.access";
 import { registerEditorHandlers } from "./collab.editor";
 import type { DocSeeder } from "./collab.editor";
+import { registerFileTreeHandlers } from "./collab.filetree";
 
 export interface AttachCollabOptions {
   sessionResolver?: (
@@ -48,6 +49,9 @@ export function attachCollabServer(
     opts.accessCheck ?? defaultAccessCheck,
     opts.editorSeed,
   );
+  // File-tree operation hints (create/rename/delete/move) on the same
+  // socket. Contents keep flowing through editor.* untouched.
+  registerFileTreeHandlers(gateway);
   const wss = new WebSocketServer({ noServer: true });
 
   const sessionResolver =

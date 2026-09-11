@@ -216,6 +216,28 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     };
   }, [refresh]);
 
+  // File-tree operation sync (create/rename/delete/move, files + folders).
+  // The server broadcasts a file.tree.changed hint on the existing socket
+  // (forwarded by collab-bridge); the file list over REST stays the source
+  // of truth and refresh() is change-gated, so a hint for an already-known
+  // state is a no-op. The 15s poll above is the backstop for missed hints
+  // and reconnects. Contents keep flowing through Yjs untouched.
+  useEffect(() => {
+    const onTreeHint = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        type?: string;
+        projectId?: string;
+      };
+      if (!detail || detail.type !== "file.tree.changed") return;
+      if (detail.projectId !== projectId) return;
+      void refresh({ silent: true, onlyIfChanged: true }).catch(() => undefined);
+    };
+    window.addEventListener("vibe:file-tree", onTreeHint);
+    return () => {
+      window.removeEventListener("vibe:file-tree", onTreeHint);
+    };
+  }, [refresh]);
+
   // Boot the runtime once files arrive: workspace -> mount, then
   // `npm install && npm run dev` runs in the boot terminal's foreground
   // shell (Ctrl+C / closing it stops the dev server + preview).
