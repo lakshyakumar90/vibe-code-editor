@@ -73,7 +73,11 @@ export const fileController = {
         return;
       }
       const data = upsertFileSchema.parse(req.body);
-      const file = await fileService.createFile(projectId, data);
+      // Last-modified-by tracking (server-derived authenticated user).
+      const file = await fileService.createFile(projectId, {
+        ...data,
+        ...(req.user?.id ? { updatedByUserId: req.user.id } : {}),
+      });
       res.status(201).json(file);
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -94,7 +98,10 @@ export const fileController = {
         return;
       }
       const data = updateFileSchema.parse(req.body);
-      const file = await fileService.updateFile(fileId, projectId, data);
+      const file = await fileService.updateFile(fileId, projectId, {
+        ...data,
+        ...(req.user?.id ? { updatedByUserId: req.user.id } : {}),
+      });
       res.json(file);
     } catch (error) {
       if (error instanceof z.ZodError) {

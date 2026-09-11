@@ -165,6 +165,10 @@ model File {
   parent   File? @relation("FileTree", fields: [parentId], references:  [id], onDelete: Cascade)
   children File[] @relation("FileTree")
 
+  // Last-modified-by tracking (server-derived authenticated user id).
+  // Set on human saves and AI-changeset applies; null for older rows.
+  updatedByUserId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

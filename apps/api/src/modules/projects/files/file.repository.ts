@@ -17,6 +17,7 @@ export const fileRepository = {
         projectId: true,
         createdAt: true,
         updatedAt: true,
+        updatedByUserId: true,
       },
     });
   },
@@ -34,6 +35,7 @@ export const fileRepository = {
         projectId: true,
         createdAt: true,
         updatedAt: true,
+        updatedByUserId: true,
       },
     });
   },
@@ -51,6 +53,7 @@ export const fileRepository = {
         projectId: true,
         createdAt: true,
         updatedAt: true,
+        updatedByUserId: true,
       },
     });
   },
@@ -69,6 +72,7 @@ export const fileRepository = {
     isFolder: boolean;
     path: string;
     projectId: string;
+    updatedByUserId?: string | null;
   }) {
     return prisma.file.create({
       data,
@@ -84,6 +88,7 @@ export const fileRepository = {
       parentId?: string | null;
       isFolder?: boolean;
       path?: string;
+      updatedByUserId?: string | null;
     }>,
   ) {
     const existing = await prisma.file.findFirst({
@@ -105,6 +110,7 @@ export const fileRepository = {
       parentId?: string | null;
       isFolder?: boolean;
       path?: string;
+      updatedByUserId?: string | null;
     }>,
   ) {
     return prisma.file.update({

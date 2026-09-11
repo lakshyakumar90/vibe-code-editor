@@ -902,6 +902,9 @@ export const aiController = {
               parentId: await parentIdFor(dir),
               isFolder: true,
               path: change.path,
+              // "Modified by" tracking: attribute AI-applied files to the
+              // user who ran the Agent (changeset owner), not "AI".
+              updatedByUserId: cs.userId,
             });
             applied.push(change.path);
             continue;
@@ -913,6 +916,7 @@ export const aiController = {
             }
             await fileRepository.updateFileByPath(cs.projectId, change.path, {
               content: change.content ?? "",
+              updatedByUserId: cs.userId,
             });
             applied.push(change.path);
             continue;
@@ -925,6 +929,7 @@ export const aiController = {
             parentId: await parentIdFor(dir),
             isFolder: false,
             path: change.path,
+            updatedByUserId: cs.userId,
           });
           applied.push(change.path);
         }

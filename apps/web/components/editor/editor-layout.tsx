@@ -163,12 +163,20 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     setFuture([]);
   }, []);
 
-  const refresh = useCallback(async (opts?: { silent?: boolean }) => {
+  const refresh = useCallback(async (opts?: { silent?: boolean; onlyIfChanged?: boolean }) => {
     const silent = opts?.silent ?? false;
+    const onlyIfChanged = opts?.onlyIfChanged ?? false;
     try {
       if (!silent) setLoading(true);
       const response = await api.get<ProjectFile[] | FilesResponse>(`/api/projects/${projectId}/files`);
       const arr: ProjectFile[] = Array.isArray(response) ? response : ((response as FilesResponse).data ?? []);
+      if (onlyIfChanged) {
+        // Collaborator saves change updatedAt/updatedByUserId — skip state
+        // updates (and re-renders) when nothing actually changed.
+        const sig = (list: ProjectFile[]) =>
+          list.map((f) => `${f.id}:${f.updatedAt}:${f.updatedByUserId ?? ""}`).join("|");
+        if (sig(arr) === sig(filesRef.current)) return arr;
+      }
       setFiles(arr);
       // sync openFiles metadata (path/name) but keep editedContents
       setOpenFiles((prev) => prev.map((of) => arr.find((f) => f.id === of.id) ?? of).filter((of) => arr.some((f) => f.id === of.id)));
@@ -189,6 +197,24 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     refresh();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
+
+  // Collaborator-save sync for file metadata (e.g. "Last modified by").
+  // Yjs syncs content live, but nothing pushes save attributions — so poll
+  // silently and refresh on window focus. Both are change-gated inside
+  // refresh(): no state churn while nothing changed, and unsaved local
+  // edits live in editedContents/Yjs (untouched by these snapshots).
+  useEffect(() => {
+    const syncIfVisible = () => {
+      if (document.hidden) return;
+      void refresh({ silent: true, onlyIfChanged: true }).catch(() => undefined);
+    };
+    const timer = setInterval(syncIfVisible, 15000);
+    window.addEventListener("focus", syncIfVisible);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener("focus", syncIfVisible);
+    };
+  }, [refresh]);
 
   // Boot the runtime once files arrive: workspace -> mount, then
   // `npm install && npm run dev` runs in the boot terminal's foreground
@@ -649,10 +675,19 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     }
     try {
       setSaving(true);
-      await api.put(`/api/projects/${projectId}/files/${activeFile.id}`, {
+      const saved = await api.put<ProjectFile>(`/api/projects/${projectId}/files/${activeFile.id}`, {
         content: currentValue,
       });
-      const updated = { ...activeFile, content: currentValue } as ProjectFile;
+      // Take attribution + timestamp from the server response so the label
+      // flips to the current saver immediately. The old code spread the
+      // stale activeFile and kept whoever modified it previously.
+      const updated = {
+        ...activeFile,
+        content: currentValue,
+        updatedAt: saved.updatedAt ?? activeFile.updatedAt,
+        updatedByUserId: saved.updatedByUserId ?? activeFile.updatedByUserId ?? null,
+        updatedBy: saved.updatedBy ?? activeFile.updatedBy ?? null,
+      } as ProjectFile;
       setFiles((prev) => prev.map((f) => (f.id === activeFile.id ? updated : f)));
       setOpenFiles((prev) => prev.map((f) => (f.id === activeFile.id ? updated : f)));
       setEditedContents((prev) => {
@@ -1277,6 +1312,14 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
               <span className={saving ? "text-muted-foreground" : isActiveDirty ? "text-yellow-600" : "text-muted-foreground"}>
                 {saving ? "Saving..." : isActiveDirty ? "● Unsaved" : "Saved"}
               </span>
+              {!isActiveDirty && activeFile.updatedBy?.displayName && (
+                <span
+                  className="hidden max-w-[220px] truncate text-muted-foreground/80 xl:inline"
+                  title={`Last modified ${(() => { try { return new Date(activeFile.updatedAt).toLocaleString(); } catch { return ""; } })()}`}
+                >
+                  Last modified by {activeFile.updatedBy.displayName}
+                </span>
+              )}
               <button
                 onClick={handleReset}
                 disabled={!isActiveDirty || saving}
