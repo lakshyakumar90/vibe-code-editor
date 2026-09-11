@@ -127,10 +127,44 @@ model Project {
   aiRuns          AIRun[]
   changeSets      ChangeSet[]
 
+  gitRepository GitRepository?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([ownerId])
+}
+
+// Phase 3 (GitHub import): 1:1 binding between an IDE project and the
+// remote GitHub repository it was imported from. Records remote identity
+// and the imported revision only — NEVER commits, diffs, Git objects,
+// branch history, or credentials. The OAuth token stays in Account.
+model GitRepository {
+  id        String  @id @default(cuid())
+  projectId String  @unique
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  githubRepoId String
+  owner        String
+  repo         String
+  fullName     String
+
+  defaultBranch String
+  currentBranch String
+
+  importedSha String
+
+  private  Boolean @default(false)
+  canRead  Boolean @default(false)
+  canWrite Boolean @default(false)
+  canAdmin Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([githubRepoId])
+  @@index([fullName])
+  @@map("git_repository")
 }
 
 enum Template {
