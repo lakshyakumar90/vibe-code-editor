@@ -15,6 +15,16 @@ const serviceMocks = vi.hoisted(() => ({
   unstageAllPaths: vi.fn(),
   discardProjectPaths: vi.fn(),
   commitProject: vi.fn(),
+  getRemoteState: vi.fn(),
+  fetchRemote: vi.fn(),
+  pullProject: vi.fn(),
+  pushProject: vi.fn(),
+  listProjectBranches: vi.fn(),
+  createProjectBranch: vi.fn(),
+  checkoutProjectBranch: vi.fn(),
+  getProjectHistory: vi.fn(),
+  getCommitDetail: vi.fn(),
+  getHistoryDiff: vi.fn(),
 }));
 
 vi.mock("./git.service", () => serviceMocks);
@@ -99,5 +109,119 @@ describe("gitController", () => {
     const { req, res } = reqRes({ projectId: "p1" }, { userId: "attacker" });
     await gitController.stageAll(req, res);
     expect(serviceMocks.stageAllPaths).toHaveBeenCalledWith("p1", { id: "u1", name: "R", email: "r@x.com" });
+  });
+
+  it("remote/fetch/pull/push delegate with session identity", async () => {
+    serviceMocks.getRemoteState.mockResolvedValue({ capability: "LOCAL_ONLY" });
+    serviceMocks.fetchRemote.mockResolvedValue({ branch: "main" });
+    serviceMocks.pullProject.mockResolvedValue({ pulled: false });
+    serviceMocks.pushProject.mockResolvedValue({ pushed: true });
+    const user = { id: "u1", name: "R", email: "r@x.com" };
+    let ctx = reqRes({ projectId: "p1" }, {}, {}, user);
+    await gitController.getRemote(ctx.req, ctx.res);
+    expect(serviceMocks.getRemoteState).toHaveBeenCalledWith("p1", user);
+    ctx = reqRes({ projectId: "p1" }, {}, {}, user);
+    await gitController.fetch(ctx.req, ctx.res);
+    expect(serviceMocks.fetchRemote).toHaveBeenCalledWith("p1", user);
+    ctx = reqRes({ projectId: "p1" }, {}, {}, user);
+    await gitController.pull(ctx.req, ctx.res);
+    expect(serviceMocks.pullProject).toHaveBeenCalledWith("p1", user);
+    ctx = reqRes({ projectId: "p1" }, { branch: "main" }, {}, user);
+    await gitController.push(ctx.req, ctx.res);
+    expect(serviceMocks.pushProject).toHaveBeenCalledWith("p1", user, "main");
+    ctx = reqRes({ projectId: "p1" }, {}, {}, user);
+    await gitController.push(ctx.req, ctx.res);
+    expect(serviceMocks.pushProject).toHaveBeenCalledWith("p1", user, undefined);
+  });
+
+  it("branch endpoints validate input before service", async () => {
+    serviceMocks.createProjectBranch.mockResolvedValue({ branch: { name: "x" } });
+    serviceMocks.checkoutProjectBranch.mockResolvedValue({ branch: "x" });
+    serviceMocks.listProjectBranches.mockResolvedValue({ current: "main", local: [], remote: [] });
+    let ctx = reqRes({ projectId: "p1" }, { name: "../evil" });
+    await gitController.createBranch(ctx.req, ctx.res);
+    expect(ctx.status).toHaveBeenCalledWith(400);
+    expect(serviceMocks.createProjectBranch).not.toHaveBeenCalled();
+    ctx = reqRes({ projectId: "p1" }, { name: "feature/x", from: "main" });
+    await gitController.createBranch(ctx.req, ctx.res);
+    expect(ctx.status).toHaveBeenCalledWith(201);
+    expect(serviceMocks.createProjectBranch).toHaveBeenCalledWith(
+      "p1",
+      expect.anything(),
+      "feature/x",
+      "main",
+    );
+    ctx = reqRes({ projectId: "p1" }, { name: "feature/x" });
+    await gitController.checkout(ctx.req, ctx.res);
+    expect(serviceMocks.checkoutProjectBranch).toHaveBeenCalledWith("p1", expect.anything(), "feature/x");
+    ctx = reqRes({ projectId: "p1" });
+    await gitController.listBranches(ctx.req, ctx.res);
+    expect(serviceMocks.listProjectBranches).toHaveBeenCalledWith("p1", expect.anything());
+  });
+
+  it("history endpoints validate sha/cursor/limit", async () => {
+    serviceMocks.getProjectHistory.mockResolvedValue({ commits: [] });
+    serviceMocks.getCommitDetail.mockResolvedValue({ sha: "s" });
+    serviceMocks.getHistoryDiff.mockResolvedValue({ path: "a" });
+    let ctx = reqRes({ projectId: "p1" }, {}, { limit: "5000", cursor: "nope" });
+    await gitController.getHistory(ctx.req, ctx.res);
+    expect(ctx.status).toHaveBeenCalledWith(400);
+    expect(serviceMocks.getProjectHistory).not.toHaveBeenCalled();
+    ctx = reqRes({ projectId: "p1" }, {}, { limit: "10" });
+    await gitController.getHistory(ctx.req, ctx.res);
+    expect(serviceMocks.getProjectHistory).toHaveBeenCalledWith("p1", expect.anything(), {
+      branch: undefined,
+      limit: 10,
+      cursor: null,
+    });
+    ctx = reqRes({ projectId: "p1", sha: "zzz" });
+    await gitController.getCommit(ctx.req, ctx.res);
+    expect(ctx.status).toHaveBeenCalledWith(400);
+    expect(serviceMocks.getCommitDetail).not.toHaveBeenCalled();
+    const sha = "a".repeat(40);
+    ctx = reqRes({ projectId: "p1", sha });
+    await gitController.getCommit(ctx.req, ctx.res);
+    expect(serviceMocks.getCommitDetail).toHaveBeenCalledWith("p1", expect.anything(), sha);
+    ctx = reqRes({ projectId: "p1", sha }, {}, { path: "a.txt" });
+    await gitController.getCommitDiff(ctx.req, ctx.res);
+    expect(serviceMocks.getHistoryDiff).toHaveBeenCalledWith("p1", expect.anything(), sha, "a.txt");
+  });
+
+  it("route roles separate viewers from editors (static contract)", async () => {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const raw = fs.readFileSync(path.join(__dirname, "git.routes.ts"), "utf8");
+    // Strip comments: documentation may name future phases; only code counts.
+    const src = raw
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("*") && !line.trim().startsWith("//"))
+      .join("\n");
+    // Reads: VIEWER.
+    for (const route of ["git/status", "git/diff", "git/remote", "git/branches", "git/history"]) {
+      expect(src).toContain(route);
+    }
+    // Mutations require EDITOR (fetch is intentionally read-level).
+    const editorRoutes = [
+      "git/ensure",
+      "git/stage",
+      "git/unstage",
+      "git/stage-all",
+      "git/unstage-all",
+      "git/discard",
+      "git/commit",
+      "git/pull",
+      "git/push",
+      "git/checkout",
+    ];
+    for (const route of editorRoutes) {
+      const idx = src.indexOf(route);
+      expect(idx, route).toBeGreaterThan(-1);
+      const window = src.slice(idx, idx + 400);
+      expect(window).toContain("ProjectRole.EDITOR");
+    }
+    // No force/push --force surface, no PR/merge/rebase surface.
+    expect(src).not.toMatch(/--force|pull-request|merge|rebase|cherry|revert/);
+    // History diff route exists; no revert/checkout-of-commit route.
+    expect(src).toContain("git/history/:sha/diff");
   });
 });

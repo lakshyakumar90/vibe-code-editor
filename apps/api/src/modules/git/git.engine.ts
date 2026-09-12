@@ -6,12 +6,12 @@ import { normalizeBranchName, resolveWorktreePath } from "./git.paths";
 import { hasGitDir } from "./git.store";
 
 /**
- * Phase 4A — server-side Git engine (simple-git wrapper).
+ * Phase 4A — server-side Git engine (simple-git wrapper), local operations.
  *
- * The ONLY module that touches the `git` binary. All operations are local
- * (status/diff/show/add/reset/checkout/commit/rev-parse/init/config/remote
- * add) — no fetch/pull/push/clone. No method accepts user-supplied args;
- * every path is validated + jailed before use.
+ * This module plus `git.remote.ts` are the ONLY modules that touch the
+ * `git` binary. Local ops live here; remote/branch/history transport ops
+ * live in `git.remote.ts`. No method accepts user-supplied args; every
+ * path is validated + jailed before use.
  */
 
 export type GitFileStatus =
@@ -43,7 +43,7 @@ export interface CommitIdentity {
   email: string;
 }
 
-const MAX_DIFF_BYTES = 256 * 1024;
+export const MAX_DIFF_BYTES = 256 * 1024;
 
 function git(cwd: string): SimpleGit {
   return simpleGit({ baseDir: cwd, trimmed: false });

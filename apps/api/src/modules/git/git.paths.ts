@@ -76,6 +76,35 @@ export function resolveWorktreePath(worktreeRoot: string, repoPath: string): str
   return resolved;
 }
 
+/** Maximum branch name length (well under git's ref limits). */
+export const MAX_BRANCH_LENGTH = 128;
+
+/**
+ * Phase 4B — centralized branch-name validation (pure).
+ * Mirrors `git check-ref-format` rules conservatively: no traversal,
+ * no flag-like leading dashes, no refspec metacharacters, no `@{`
+ * reflog syntax, no `.lock` suffixes. The engine additionally confirms
+ * with `git check-ref-format --branch` before use.
+ */
+export function isValidBranchName(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  if (value.length === 0 || value.length > MAX_BRANCH_LENGTH) return false;
+  if (value === "HEAD") return false;
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x20\x7f~^:?*\[\\]/.test(value)) return false;
+  if (value.includes("..") || value.includes("@{") || value.includes("@")) return false;
+  if (value.includes("//")) return false;
+  if (value === "refs" || value.startsWith("refs/")) return false;
+  const segs = value.split("/");
+  for (const s of segs) {
+    if (s.length === 0 || s === "." || s === "..") return false;
+    if (s.startsWith(".") || s.startsWith("-")) return false;
+    if (s.endsWith(".") || s.endsWith(".lock")) return false;
+  }
+  if (value.startsWith("-") || value.startsWith("/") || value.endsWith("/")) return false;
+  return true;
+}
+
 /** Validate a branch name for `git init -b` (no shell involved, still strict). */
 export function normalizeBranchName(raw: unknown): string {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > 128) {

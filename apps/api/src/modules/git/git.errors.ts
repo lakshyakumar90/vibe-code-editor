@@ -15,6 +15,23 @@ export const GIT_ERROR_CODES = {
   GIT_COMMIT_INVALID_MESSAGE: 400,
   GIT_BOOTSTRAP_FAILED: 422,
   GIT_OPERATION_FAILED: 500,
+  // Phase 4B — remote synchronization, branches, history.
+  GIT_REMOTE_UNAVAILABLE: 503,
+  GIT_GITHUB_REAUTH_REQUIRED: 401,
+  GIT_REMOTE_MISMATCH: 409,
+  GIT_REMOTE_TIMEOUT: 504,
+  GIT_PUSH_REJECTED: 409,
+  GIT_PUSH_DENIED: 403,
+  GIT_PULL_DIVERGED: 409,
+  GIT_NO_UPSTREAM: 422,
+  GIT_DIRTY_WORKTREE: 409,
+  GIT_BRANCH_EXISTS: 409,
+  GIT_BRANCH_NOT_FOUND: 404,
+  GIT_INVALID_BRANCH: 400,
+  GIT_COMMIT_NOT_FOUND: 404,
+  // Phase 4B hardening: legacy imports whose original root was never
+  // persisted must not drive remote mutations.
+  GIT_IMPORT_ROOT_UNKNOWN: 409,
 } as const;
 
 export type GitErrorCode = keyof typeof GIT_ERROR_CODES;

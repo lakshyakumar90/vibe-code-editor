@@ -802,24 +802,35 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   }, [editedContents]);
 
   // Phase 4A — Source Control diff selection rendered in the main pane.
-  const [gitDiffSel, setGitDiffSel] = useState<{ path: string; staged: boolean } | null>(null);
-  const [gitDiff, setGitDiff] = useState<GitDiff | null>(null);
+  // Phase 4B — extended with commit mode ({ sha }) reusing the same pane.
+  const [gitDiffSel, setGitDiffSel] = useState<
+    { path: string; staged: boolean; sha?: string } | null
+  >(null);
+  const [gitDiff, setGitDiff] = useState<(GitDiff & { sha?: string }) | null>(null);
   const [gitDiffLoading, setGitDiffLoading] = useState(false);
 
-  const handleOpenGitDiff = useCallback(async (path: string, staged: boolean) => {
-    setGitDiffSel({ path, staged });
-    setGitDiff(null);
-    setGitDiffLoading(true);
-    try {
-      const diff = await gitService.getDiff(projectId, path, staged);
-      setGitDiff(diff);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load diff");
-      setGitDiffSel(null);
-    } finally {
-      setGitDiffLoading(false);
-    }
-  }, [projectId]);
+  const handleOpenGitDiff = useCallback(
+    async (path: string, mode: { staged: boolean } | { sha: string }) => {
+      const sel =
+        "sha" in mode ? { path, staged: false, sha: mode.sha } : { path, staged: mode.staged };
+      setGitDiffSel(sel);
+      setGitDiff(null);
+      setGitDiffLoading(true);
+      try {
+        const diff =
+          "sha" in mode
+            ? await gitService.getCommitDiff(projectId, mode.sha, path)
+            : await gitService.getDiff(projectId, path, mode.staged);
+        setGitDiff(diff);
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Failed to load diff");
+        setGitDiffSel(null);
+      } finally {
+        setGitDiffLoading(false);
+      }
+    },
+    [projectId],
+  );
 
   /** Dispose the Monaco model for a closed file (one model per open file). */
   const disposeFileModel = useCallback((file: ProjectFile) => {
@@ -1614,7 +1625,11 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
                       {gitDiff?.oldPath ? `${gitDiff.oldPath} → ` : ""}
                       <span className="font-medium text-foreground">{gitDiffSel.path}</span>
                       <span className="ml-2 rounded bg-accent px-1.5 py-0.5 text-[10px]">
-                        {gitDiffSel.staged ? "Staged vs HEAD" : "Working vs HEAD"}
+                        {gitDiffSel.sha
+                          ? `${gitDiffSel.sha.slice(0, 7)}`
+                          : gitDiffSel.staged
+                            ? "Staged vs HEAD"
+                            : "Working vs HEAD"}
                       </span>
                     </span>
                     <button

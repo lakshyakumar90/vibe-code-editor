@@ -26,6 +26,14 @@ const engineMocks = vi.hoisted(() => ({
 
 vi.mock("./git.engine", () => engineMocks);
 
+const remoteMocks = vi.hoisted(() => ({
+  getCloneMarker: vi.fn(async () => null),
+  getUpstream: vi.fn(async () => null),
+  aheadBehind: vi.fn(async () => ({ ahead: 0, behind: 0 })),
+}));
+
+vi.mock("./git.remote", () => remoteMocks);
+
 const dbMocks = vi.hoisted(() => ({
   gitRepositoryFindUnique: vi.fn(),
   gitRepositoryUpdate: vi.fn(),

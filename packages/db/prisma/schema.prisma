@@ -167,6 +167,14 @@ model GitRepository {
   initializedAt DateTime?
   lastVerifiedAt DateTime?
 
+  // Phase 4B: GitHub-repo → IDE-project path mapping. "" = repository
+  // root; "apps/web" = selected monorepo application. NULL = unknown
+  // (pre-4B imports, recorded before the root was persisted): remote Git
+  // operations are blocked until re-import records a proven root.
+  // Authoritative for every IDE-path ↔ git-path translation.
+  // Never user-editable.
+  importRoot String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

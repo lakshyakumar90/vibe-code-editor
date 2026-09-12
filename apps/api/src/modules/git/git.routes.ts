@@ -7,9 +7,12 @@ import { gitController } from "./git.controller";
 /**
  * Phase 4A — Source Control routes, mounted at `/api/projects`
  * (paths carry their own `:projectId` so `requireProjectAccess` resolves).
+ * Phase 4B adds remote sync, branches, history (no PRs/reviews/merges).
  *
- * Reads: VIEWER. Mutations (ensure/stage/unstage/discard/commit): EDITOR.
- * No remote operations exist in 4A — no push/pull/fetch/branch routes.
+ * Reads (status/diff/remote/branches/history): VIEWER.
+ * Local mutations (ensure/stage/unstage/discard/commit): EDITOR.
+ * Branch + remote mutations (create/checkout/fetch/pull/push): EDITOR
+ * (push additionally requires live GitHub write permission).
  */
 const router = Router();
 
@@ -59,6 +62,62 @@ router.post(
   "/:projectId/git/commit",
   requireProjectAccess(ProjectRole.EDITOR),
   gitController.commit,
+);
+
+// Phase 4B — remote state + synchronization (explicit origin only).
+router.get(
+  "/:projectId/git/remote",
+  requireProjectAccess(ProjectRole.VIEWER),
+  gitController.getRemote,
+);
+router.post(
+  "/:projectId/git/fetch",
+  requireProjectAccess(ProjectRole.VIEWER),
+  gitController.fetch,
+);
+router.post(
+  "/:projectId/git/pull",
+  requireProjectAccess(ProjectRole.EDITOR),
+  gitController.pull,
+);
+router.post(
+  "/:projectId/git/push",
+  requireProjectAccess(ProjectRole.EDITOR),
+  gitController.push,
+);
+
+// Phase 4B — branches (create/switch locally; push is a separate action).
+router.get(
+  "/:projectId/git/branches",
+  requireProjectAccess(ProjectRole.VIEWER),
+  gitController.listBranches,
+);
+router.post(
+  "/:projectId/git/branches",
+  requireProjectAccess(ProjectRole.EDITOR),
+  gitController.createBranch,
+);
+router.post(
+  "/:projectId/git/checkout",
+  requireProjectAccess(ProjectRole.EDITOR),
+  gitController.checkout,
+);
+
+// Phase 4B — local history (reads from git, never Postgres).
+router.get(
+  "/:projectId/git/history",
+  requireProjectAccess(ProjectRole.VIEWER),
+  gitController.getHistory,
+);
+router.get(
+  "/:projectId/git/history/:sha",
+  requireProjectAccess(ProjectRole.VIEWER),
+  gitController.getCommit,
+);
+router.get(
+  "/:projectId/git/history/:sha/diff",
+  requireProjectAccess(ProjectRole.VIEWER),
+  gitController.getCommitDiff,
 );
 
 export { router as gitRouter };

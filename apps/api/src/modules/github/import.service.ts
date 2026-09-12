@@ -131,6 +131,7 @@ export interface ImportPlan {
     defaultBranch: string;
     currentBranch: string;
     importedSha: string;
+    importRoot: string;
     private: boolean;
     canRead: boolean;
     canWrite: boolean;
@@ -592,6 +593,9 @@ export async function planImport(input: ImportRunInput): Promise<ImportResult> {
       defaultBranch: meta.defaultBranch ?? "main",
       currentBranch: meta.defaultBranch ?? "main",
       importedSha: ref,
+      // Phase 4B: persist the selected application root so IDE paths map
+      // back to GitHub paths ("" = repository root).
+      importRoot: root,
       private: meta.private,
       canRead: meta.access.canRead,
       canWrite: meta.access.canWrite,

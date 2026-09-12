@@ -2,17 +2,37 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { GitError } from "./git.errors";
 import {
+  checkoutProjectBranch,
   commitProject,
+  createProjectBranch,
   discardProjectPaths,
   ensureRepository,
+  fetchRemote,
+  getCommitDetail,
+  getHistoryDiff,
   getProjectDiff,
+  getProjectHistory,
   getProjectStatus,
+  getRemoteState,
+  listProjectBranches,
+  pullProject,
+  pushProject,
   stageAllPaths,
   stageProjectPaths,
   unstageAllPaths,
   unstageProjectPaths,
 } from "./git.service";
-import { gitCommitSchema, gitDiffQuerySchema, gitPathsSchema } from "./git.validation";
+import {
+  gitCheckoutSchema,
+  gitCommitSchema,
+  gitCommitShaParamSchema,
+  gitCreateBranchSchema,
+  gitDiffQuerySchema,
+  gitHistoryDiffQuerySchema,
+  gitHistoryQuerySchema,
+  gitPathsSchema,
+  gitPushSchema,
+} from "./git.validation";
 
 /**
  * Phase 4A — Source Control endpoints.
@@ -143,6 +163,122 @@ export const gitController = {
       const input = gitCommitSchema.parse(req.body);
       const result = await commitProject(projectId as string, sessionUser(req), input.message);
       res.status(201).json({ success: true, data: result });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async getRemote(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const state = await getRemoteState(projectId as string, sessionUser(req));
+      res.json({ success: true, data: state });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async fetch(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const result = await fetchRemote(projectId as string, sessionUser(req));
+      res.json({ success: true, data: result });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async pull(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const result = await pullProject(projectId as string, sessionUser(req));
+      res.json({ success: true, data: result });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async push(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const input = gitPushSchema.parse(req.body ?? {});
+      const result = await pushProject(projectId as string, sessionUser(req), input.branch);
+      res.json({ success: true, data: result });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async listBranches(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const result = await listProjectBranches(projectId as string, sessionUser(req));
+      res.json({ success: true, data: result });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async createBranch(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const input = gitCreateBranchSchema.parse(req.body);
+      const result = await createProjectBranch(
+        projectId as string,
+        sessionUser(req),
+        input.name,
+        input.from,
+      );
+      res.status(201).json({ success: true, data: result });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async checkout(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const input = gitCheckoutSchema.parse(req.body);
+      const result = await checkoutProjectBranch(projectId as string, sessionUser(req), input.name);
+      res.json({ success: true, data: result });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async getHistory(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const query = gitHistoryQuerySchema.parse(req.query);
+      const result = await getProjectHistory(projectId as string, sessionUser(req), {
+        branch: query.branch,
+        limit: query.limit,
+        cursor: query.cursor ?? null,
+      });
+      res.json({ success: true, data: result });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async getCommit(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const params = gitCommitShaParamSchema.parse(req.params);
+      const result = await getCommitDetail(projectId as string, sessionUser(req), params.sha);
+      res.json({ success: true, data: result });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async getCommitDiff(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const params = gitCommitShaParamSchema.parse(req.params);
+      const query = gitHistoryDiffQuerySchema.parse(req.query);
+      const result = await getHistoryDiff(projectId as string, sessionUser(req), params.sha, query.path);
+      res.json({ success: true, data: result });
     } catch (err) {
       sendGitError(res, err);
     }
