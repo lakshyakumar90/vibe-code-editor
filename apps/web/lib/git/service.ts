@@ -209,6 +209,62 @@ export const gitService = {
     return res.data;
   },
 
+  /**
+   * Phase 4B.5 — attach a local-only project to an existing GitHub repo.
+   * Attaches only (no push): the user clicks Push explicitly afterwards.
+   */
+  async attachRemote(
+    projectId: string,
+    input: { owner: string; repo: string },
+  ): Promise<{ attached: boolean; empty: boolean; branch: string; remote: RemoteState }> {
+    const res = await api.post<
+      ApiResponse<{ attached: boolean; empty: boolean; branch: string; remote: RemoteState }>
+    >(`/api/projects/${projectId}/git/remote`, input);
+    return res.data;
+  },
+
+  /**
+   * Phase 4B.5 — publish a local-only project as a new GitHub repository.
+   * Creates the repo, attaches it, and pushes the current branch.
+   */
+  async publish(
+    projectId: string,
+    input: { name: string; description?: string; private: boolean; organization?: string | null },
+  ): Promise<{
+    attached: boolean;
+    created: boolean;
+    fullName: string;
+    remote: RemoteState;
+    push: {
+      branch: string;
+      remote: string;
+      pushed: boolean;
+      oldSha: string | null;
+      newSha: string | null;
+      ahead: number;
+      behind: number;
+    };
+  }> {
+    const res = await api.post<
+      ApiResponse<{
+        attached: boolean;
+        created: boolean;
+        fullName: string;
+        remote: RemoteState;
+        push: {
+          branch: string;
+          remote: string;
+          pushed: boolean;
+          oldSha: string | null;
+          newSha: string | null;
+          ahead: number;
+          behind: number;
+        };
+      }>
+    >(`/api/projects/${projectId}/git/publish`, input);
+    return res.data;
+  },
+
   async fetch(projectId: string): Promise<{ branch: string; upstream: string | null; ahead: number; behind: number; fetchedAt: string }> {
     const res = await api.post<
       ApiResponse<{ branch: string; upstream: string | null; ahead: number; behind: number; fetchedAt: string }>

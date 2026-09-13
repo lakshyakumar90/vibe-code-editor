@@ -17,6 +17,9 @@ router.get("/repos", reposController.listRepos);
 router.get("/repos/:owner/:repo", reposController.getRepo);
 router.get("/repos/:owner/:repo/inspection", reposController.getInspection);
 
+// Phase 4B.5 — organization list for the publish Owner picker.
+router.get("/orgs", reposController.listOrgs);
+
 // Phase 3 — repository import (server-verified; no Git execution).
 router.post("/import", importController.importRepo);
 

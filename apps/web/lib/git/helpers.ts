@@ -126,6 +126,41 @@ export function branchNameError(name: string): string | null {
   return null;
 }
 
+/**
+ * Phase 4B.5 — client mirror of the server repository-name rule
+ * (repos.service:isValidRepoName). Instant feedback only; the server
+ * re-validates authoritatively. Pure.
+ */
+export function repoNameError(name: string): string | null {
+  if (name.length === 0) return "Enter a repository name";
+  if (name.length > 100) return "Repository name is too long (max 100 characters)";
+  if (name === "." || name === "..") return "Repository name is reserved";
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x20\x7f]/.test(name)) return "Repository name contains invalid characters";
+  if (!/^[A-Za-z0-9._-]+$/.test(name)) {
+    return "Use letters, numbers, . _ - only";
+  }
+  return null;
+}
+
+/**
+ * Phase 4B.5 — suggest a valid repository name from a project title.
+ * Lowercases, swaps runs of invalid chars for "-", trims edges, and
+ * falls back to "my-project". Pure.
+ */
+export function suggestRepoName(projectName: string | null | undefined): string {
+  const base = (projectName ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^[._-]+|[._-]+$/g, "")
+    .slice(0, 100);
+  if (!base || base === "." || base === ".." || repoNameError(base) !== null) {
+    return "my-project";
+  }
+  return base;
+}
+
 /** Short relative time for history rows ("2 min ago"). Pure. */
 export function formatCommitTime(iso: string, nowMs = Date.now()): string {
   const then = Date.parse(iso);

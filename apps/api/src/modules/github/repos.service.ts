@@ -557,3 +557,165 @@ export async function inspectRepository(
 export function grantedRepoAccess(scopes: string | null, storedScope: string | null): boolean {
   return hasRepoScope(scopes ?? storedScope);
 }
+
+// -- Phase 4B.5: repository creation (Publish to GitHub) ------------------------
+
+const REPO_NAME_RE = /^[A-Za-z0-9._-]{1,100}$/;
+
+/**
+ * Conservative GitHub repository-name rule. Pure. The web client mirrors
+ * this exactly for instant feedback; the server re-validates authoritatively.
+ */
+export function isValidRepoName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "." &&
+    value !== ".." &&
+    REPO_NAME_RE.test(value)
+  );
+}
+
+/** Trim + cap the publish description. Pure. */
+export function normalizePublishDescription(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim().slice(0, 1000);
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+export interface CreateRepoInput {
+  name: string;
+  description?: string;
+  /** true = private, false = public. */
+  private: boolean;
+}
+
+export interface CreateRepoResult {
+  repo: GitHubRepoDto | null;
+  scopes: string | null;
+  error: { status: number; rateLimited: boolean } | null;
+}
+
+async function callGitHubPost<T>(
+  token: string,
+  path: string,
+  body: Record<string, unknown>,
+  fetchImpl: GitHubFetch,
+): Promise<GitHubCallResult<T>> {
+  let response: Response;
+  try {
+    response = await fetchImpl(`${API}${path}`, {
+      method: "POST",
+      headers: { ...headers(token), "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(GITHUB_VALIDATION_TIMEOUT_MS),
+    });
+  } catch {
+    return { ok: false, status: 0, data: null, scopes: null, rateLimited: false };
+  }
+  const scopes = response.headers?.get("x-oauth-scopes") ?? null;
+  const rateLimited =
+    response.status === 403 && response.headers?.get("x-ratelimit-remaining") === "0";
+  if (!response.ok) {
+    return { ok: false, status: response.status, data: null, scopes, rateLimited };
+  }
+  try {
+    const data = (await response.json()) as T;
+    return { ok: true, status: response.status, data, scopes, rateLimited: false };
+  } catch {
+    return { ok: false, status: 502, data: null, scopes, rateLimited: false };
+  }
+}
+
+function toCreateResult(
+  raw: GitHubCallResult<Record<string, unknown>>,
+): CreateRepoResult {
+  if (!raw.ok || !raw.data) {
+    return { repo: null, scopes: raw.scopes, error: { status: raw.status, rateLimited: raw.rateLimited } };
+  }
+  const dto = normalizeRepo(raw.data);
+  if (!dto) {
+    return { repo: null, scopes: raw.scopes, error: { status: 502, rateLimited: false } };
+  }
+  return { repo: dto, scopes: raw.scopes, error: null };
+}
+
+/**
+ * POST /user/repos — create a repository on the authenticated user's
+ * personal account. Token stays server-side; the normalized DTO is the
+ * only thing the caller may persist.
+ */
+export async function createUserRepo(
+  token: string,
+  input: CreateRepoInput,
+  fetchImpl: GitHubFetch = fetch,
+): Promise<CreateRepoResult> {
+  const raw = await callGitHubPost<Record<string, unknown>>(
+    token,
+    "/user/repos",
+    {
+      name: input.name,
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      private: input.private,
+      auto_init: false,
+    },
+    fetchImpl,
+  );
+  return toCreateResult(raw);
+}
+
+/**
+ * POST /orgs/{org}/repos — create a repository in an organization.
+ * The caller must validate `org` against listUserOrgs first; GitHub
+ * remains the final authority (denials map to CREATE_DENIED).
+ */
+export async function createOrgRepo(
+  token: string,
+  org: string,
+  input: CreateRepoInput,
+  fetchImpl: GitHubFetch = fetch,
+): Promise<CreateRepoResult> {
+  if (!isValidRepoSegment(org)) {
+    return { repo: null, scopes: null, error: { status: 400, rateLimited: false } };
+  }
+  const raw = await callGitHubPost<Record<string, unknown>>(
+    token,
+    `/orgs/${org}/repos`,
+    {
+      name: input.name,
+      ...(input.description !== undefined ? { description: input.description } : {}),
+      private: input.private,
+      auto_init: false,
+    },
+    fetchImpl,
+  );
+  return toCreateResult(raw);
+}
+
+export interface OrgListResult {
+  /** Validated organization logins for the authenticated user. */
+  orgs: string[];
+  error: { status: number; rateLimited: boolean } | null;
+}
+
+/**
+ * GET /user/orgs — organizations the authenticated user belongs to.
+ * Used to populate the publish Owner picker AND to validate the chosen
+ * organization server-side (never trust the browser's org string alone).
+ */
+export async function listUserOrgs(
+  token: string,
+  fetchImpl: GitHubFetch = fetch,
+): Promise<OrgListResult> {
+  const raw = await callGitHub<unknown[]>(token, "/user/orgs?per_page=100", fetchImpl);
+  if (!raw.ok || !Array.isArray(raw.data)) {
+    return { orgs: [], error: { status: raw.status, rateLimited: raw.rateLimited } };
+  }
+  const orgs: string[] = [];
+  for (const entry of raw.data) {
+    const login = (entry as Record<string, unknown> | null)?.["login"];
+    if (typeof login === "string" && isValidRepoSegment(login) && !orgs.includes(login)) {
+      orgs.push(login);
+    }
+  }
+  return { orgs, error: null };
+}

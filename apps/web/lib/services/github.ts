@@ -123,6 +123,12 @@ export const githubService = {
     );
     return response.data;
   },
+
+  /** Phase 4B.5 — organizations for the publish Owner picker. */
+  async listOrgs(): Promise<{ orgs: string[] }> {
+    const response = await api.get<ApiResponse<{ orgs: string[] }>>("/api/github/orgs");
+    return response.data;
+  },
 };
 
 export interface ImportedProject {

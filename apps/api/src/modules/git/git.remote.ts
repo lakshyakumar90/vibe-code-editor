@@ -265,6 +265,103 @@ export async function getRemoteUrl(worktreeDir: string): Promise<string | null> 
   }
 }
 
+/**
+ * Phase 4B.5 — point `origin` at a server-derived URL. The URL must already
+ * be validated by the caller (trusted host + validated owner/repo); it is
+ * re-checked here as defense in depth. Adds when absent, replaces when
+ * present. Config-only: no network traffic.
+ */
+export async function setRemoteUrl(worktreeDir: string, url: string): Promise<void> {
+  const safeUrl = assertSafeRemoteUrl(url);
+  try {
+    const existing = await getRemoteUrl(worktreeDir);
+    const g = rgit(worktreeDir, {});
+    if (existing) {
+      await g.raw(["remote", "set-url", "origin", safeUrl]);
+    } else {
+      await g.raw(["remote", "add", "origin", safeUrl]);
+    }
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    console.error("[git:remote-set]", sanitizeRemoteMessage(raw).slice(0, 300));
+    throw new GitError("GIT_OPERATION_FAILED", "Could not configure the Git remote");
+  }
+}
+
+/**
+ * Phase 4B.5 — remove `origin` (rollback for refused attachments).
+ * Config-only. Missing `origin` is success, not an error.
+ */
+export async function removeRemote(worktreeDir: string): Promise<void> {
+  try {
+    await rgit(worktreeDir, {}).raw(["remote", "remove", "origin"]);
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    // "No such remote" means there is nothing to roll back.
+    if (/no such remote/i.test(raw)) return;
+    console.error("[git:remote-remove]", sanitizeRemoteMessage(raw).slice(0, 300));
+    throw new GitError("GIT_OPERATION_FAILED", "Could not remove the Git remote");
+  }
+}
+
+/**
+ * Phase 4B.5 — resolve the remote's HEAD SHA without touching the worktree.
+ * Returns null when the repository is empty (no HEAD advertised). Network
+ * errors classify through the shared transport mapper (auth failures read
+ * as re-auth, missing repos as unavailable).
+ */
+export async function lsRemoteHead(
+  url: string,
+  authEnv: Record<string, string>,
+): Promise<string | null> {
+  const safeUrl = assertSafeRemoteUrl(url);
+  let out: string;
+  try {
+    out = await withRemoteTimeout("clone", () =>
+      rgit(process.cwd(), authEnv).raw(["ls-remote", safeUrl, "HEAD"]),
+    );
+  } catch (err) {
+    throw classifyTransportError("clone", err);
+  }
+  for (const line of String(out).split("\n")) {
+    const sha = line.split(/\s+/)[0]?.trim() ?? "";
+    if (/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(sha)) return sha;
+  }
+  return null;
+}
+
+/**
+ * Phase 4B.5 — ancestry check (`git merge-base --is-ancestor`).
+ * Exit 0 => ancestor; exit 1 => not. Used to decide whether attaching an
+ * existing non-empty repository is safe (fast-forward push possible).
+ */
+export async function isAncestor(
+  worktreeDir: string,
+  ancestor: string,
+  descendant: string,
+): Promise<boolean> {
+  if (!/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(ancestor) || !/^[0-9a-f]{40}([0-9a-f]{24})?$/.test(descendant)) {
+    throw new GitError("GIT_OPERATION_FAILED", "Could not compare repository history");
+  }
+  try {
+    // NOTE: simple-git treats `merge-base --is-ancestor` exit code 1
+    // (not-an-ancestor) as success, so use execFile for a real exit code:
+    // 0 => ancestor, 1 => not ancestor, other => failure.
+    const { execFile } = await import("node:child_process");
+    const code: number = await new Promise((resolve, reject) => {
+      execFile("git", ["-C", worktreeDir, "merge-base", "--is-ancestor", ancestor, descendant], (err) => {
+        if (!err) return resolve(0);
+        const c = (err as NodeJS.ErrnoException & { code?: number }).code;
+        if (c === 1) return resolve(1);
+        reject(err);
+      });
+    });
+    return code === 0;
+  } catch {
+    throw new GitError("GIT_OPERATION_FAILED", "Could not compare repository history");
+  }
+}
+
 export interface RemoteBranchInfo {
   name: string;
   current: boolean;

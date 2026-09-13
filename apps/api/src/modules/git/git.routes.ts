@@ -70,6 +70,19 @@ router.get(
   requireProjectAccess(ProjectRole.VIEWER),
   gitController.getRemote,
 );
+// Phase 4B.5 — remote setup & publish for local-only projects.
+// Attach/publish mutate the binding + origin config: EDITOR only
+// (GitHub write permission is re-checked live inside the handlers).
+router.post(
+  "/:projectId/git/remote",
+  requireProjectAccess(ProjectRole.EDITOR),
+  gitController.attachRemote,
+);
+router.post(
+  "/:projectId/git/publish",
+  requireProjectAccess(ProjectRole.EDITOR),
+  gitController.publish,
+);
 router.post(
   "/:projectId/git/fetch",
   requireProjectAccess(ProjectRole.VIEWER),

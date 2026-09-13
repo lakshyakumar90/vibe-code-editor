@@ -6,6 +6,7 @@ import {
   grantedRepoAccess,
   inspectRepository,
   isValidRepoSegment,
+  listUserOrgs,
   listUserRepos,
 } from "./repos.service";
 import { listReposQuerySchema } from "./repos.validation";
@@ -238,5 +239,41 @@ export const reposController = {
       tree,
     );
     return res.status(200).json({ success: true, data: built.response });
+  },
+
+  /**
+   * Phase 4B.5 — GET /api/github/orgs. Organizations of the authenticated
+   * user for the publish Owner picker (and server-side validation of the
+   * chosen org in the publish endpoint). Token stays server-side.
+   */
+  async listOrgs(req: Request, res: Response) {
+    const userId = req.user!.id as string;
+    const account = await prisma.account.findFirst({
+      where: { userId, providerId: "github" },
+      select: { accessToken: true, scope: true },
+    });
+    if (!account?.accessToken) {
+      return res.status(409).json({
+        success: false,
+        code: "GITHUB_NOT_CONNECTED",
+        message: "Connect GitHub to list organizations.",
+      });
+    }
+    const result = await listUserOrgs(account.accessToken);
+    if (result.error) {
+      if (result.error.status === 401 || result.error.status === 403) {
+        return res.status(401).json({
+          success: false,
+          code: "GITHUB_UNAUTHORIZED",
+          message: "GitHub rejected the stored authorization. Reconnect GitHub.",
+        });
+      }
+      return res.status(502).json({
+        success: false,
+        code: "GITHUB_REQUEST_FAILED",
+        message: "Could not reach GitHub. Try again shortly.",
+      });
+    }
+    return res.status(200).json({ success: true, data: { orgs: result.orgs } });
   },
 };

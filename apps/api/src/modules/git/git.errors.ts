@@ -32,6 +32,17 @@ export const GIT_ERROR_CODES = {
   // Phase 4B hardening: legacy imports whose original root was never
   // persisted must not drive remote mutations.
   GIT_IMPORT_ROOT_UNKNOWN: 409,
+  // Phase 4B.5 — remote setup & publish (Add Remote / Publish to GitHub).
+  // Local-only projects gain a verified GitHub binding through these flows;
+  // the Phase 4B transport rules (derived origin, no force push) still apply.
+  GIT_REMOTE_ALREADY_CONFIGURED: 409,
+  GIT_REMOTE_ATTACH_FAILED: 500,
+  GIT_REMOTE_HISTORY_CONFLICT: 409,
+  GIT_REMOTE_NOT_WRITABLE: 403,
+  GIT_PUBLISH_FAILED: 500,
+  GITHUB_REPO_ALREADY_EXISTS: 409,
+  GITHUB_REPO_CREATE_DENIED: 403,
+  GITHUB_REPO_CREATE_FAILED: 502,
 } as const;
 
 export type GitErrorCode = keyof typeof GIT_ERROR_CODES;

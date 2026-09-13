@@ -25,6 +25,8 @@ import {
   statusBadge,
   statusCounts,
 } from "@/lib/git/helpers";
+import { AddRemoteDialog } from "./add-remote-dialog";
+import { PublishDialog } from "./publish-dialog";
 
 interface SourceControlPanelProps {
   projectId: string;
@@ -51,6 +53,15 @@ const REMOTE_ERROR_TOASTS: Record<string, "info" | "error"> = {
   GIT_BRANCH_EXISTS: "error",
   GIT_BRANCH_NOT_FOUND: "error",
   GIT_IMPORT_ROOT_UNKNOWN: "error",
+  // Phase 4B.5 — remote setup & publish.
+  GIT_REMOTE_ALREADY_CONFIGURED: "info",
+  GIT_REMOTE_ATTACH_FAILED: "error",
+  GIT_REMOTE_HISTORY_CONFLICT: "error",
+  GIT_REMOTE_NOT_WRITABLE: "error",
+  GIT_PUBLISH_FAILED: "error",
+  GITHUB_REPO_ALREADY_EXISTS: "error",
+  GITHUB_REPO_CREATE_DENIED: "error",
+  GITHUB_REPO_CREATE_FAILED: "error",
 };
 
 export function SourceControlPanel({ projectId, onOpenDiff, isPathDirty }: SourceControlPanelProps) {
@@ -83,6 +94,10 @@ export function SourceControlPanel({ projectId, onOpenDiff, isPathDirty }: Sourc
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedCommit, setSelectedCommit] = useState<CommitDetail | null>(null);
+
+  // Phase 4B.5 — remote setup dialogs for local-only repositories.
+  const [showAddRemote, setShowAddRemote] = useState(false);
+  const [showPublish, setShowPublish] = useState(false);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -283,6 +298,16 @@ export function SourceControlPanel({ projectId, onOpenDiff, isPathDirty }: Sourc
       toast.success(`Pushed ${result.branch} to origin`);
     }
   }, [projectId, runOp, refreshAfterRemoteOp]);
+
+  // Phase 4B.5 — after attach/publish the panel must immediately reflect
+  // the new origin (no browser refresh): status, remote, and branches.
+  const handleRemoteSetupDone = useCallback(async () => {
+    setShowAddRemote(false);
+    setShowPublish(false);
+    await load();
+    await loadRemote();
+    await loadBranches();
+  }, [load, loadRemote, loadBranches]);
 
   const handleCheckout = useCallback(
     async (name: string) => {
@@ -783,6 +808,28 @@ export function SourceControlPanel({ projectId, onOpenDiff, isPathDirty }: Sourc
             )}
           </p>
         )}
+        {/* Phase 4B.5 — local-only projects get Publish / Add Remote instead
+            of Fetch/Pull/Push. Attaching never pushes by itself. */}
+        {capability === "LOCAL_ONLY" && (
+          <div className="mb-2 flex gap-1.5">
+            <button
+              onClick={() => setShowPublish(true)}
+              disabled={busy !== null}
+              className="flex-1 rounded border px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
+              title="Create a new GitHub repository and push the current branch"
+            >
+              Publish to GitHub
+            </button>
+            <button
+              onClick={() => setShowAddRemote(true)}
+              disabled={busy !== null}
+              className="flex-1 rounded border px-2 py-1.5 text-xs hover:bg-accent disabled:opacity-50"
+              title="Attach an existing GitHub repository (no push until you click Push)"
+            >
+              Add Remote
+            </button>
+          </div>
+        )}
         {capability && copy && (copy.remoteActions || copy.pushAvailable) && (
           <div className="mb-2 flex gap-1.5">
             <button
@@ -835,6 +882,21 @@ export function SourceControlPanel({ projectId, onOpenDiff, isPathDirty }: Sourc
           Local commit only — nothing is pushed.
         </p>
       </div>
+
+      {showAddRemote && (
+        <AddRemoteDialog
+          projectId={projectId}
+          onClose={() => setShowAddRemote(false)}
+          onAttached={() => void handleRemoteSetupDone()}
+        />
+      )}
+      {showPublish && (
+        <PublishDialog
+          projectId={projectId}
+          onClose={() => setShowPublish(false)}
+          onPublished={() => void handleRemoteSetupDone()}
+        />
+      )}
     </div>
   );
 }

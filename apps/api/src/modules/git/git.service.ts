@@ -1,6 +1,14 @@
 import { prisma } from "@repo/db";
 import { hasRepoScope } from "../github/github.service";
-import { fetchRepoDetail } from "../github/repos.service";
+import {
+  createOrgRepo,
+  createUserRepo,
+  fetchRepoDetail,
+  isValidRepoName,
+  isValidRepoSegment,
+  listUserOrgs,
+  normalizePublishDescription,
+} from "../github/repos.service";
 import { GitError } from "./git.errors";
 import {
   isCommitSha,
@@ -45,11 +53,15 @@ import {
   getUpstream,
   gitAuthEnv,
   historyFileDiff,
+  isAncestor,
   listBranches,
   logCommits,
+  lsRemoteHead,
   mergeFastForward,
   pushBranch,
+  removeRemote,
   setCloneMarker,
+  setRemoteUrl,
   setSparseRoot,
   tryRevparse,
   validateBranchRef,
@@ -182,6 +194,39 @@ export interface PushResultDto {
   newSha: string | null;
   ahead: number;
   behind: number;
+}
+
+// -- Phase 4B.5: remote setup & publish ----------------------------------------
+
+export interface AttachRemoteInput {
+  owner: string;
+  repo: string;
+}
+
+export interface AttachRemoteResult {
+  attached: boolean;
+  /** True when the attached repository was empty (first push still pending). */
+  empty: boolean;
+  branch: string;
+  remote: RemoteStateDto;
+}
+
+export interface PublishInput {
+  name: string;
+  description?: string;
+  /** true = private repository, false = public. */
+  private: boolean;
+  /** Organization login, or null/undefined for the personal account. */
+  organization?: string | null;
+}
+
+export interface PublishResult {
+  attached: boolean;
+  /** True when the GitHub repository was created by this call. */
+  created: boolean;
+  fullName: string;
+  remote: RemoteStateDto;
+  push: PushResultDto;
 }
 
 export interface HistoryCommitDto {
@@ -1575,6 +1620,381 @@ export async function pushProject(
       ahead,
       behind,
     };
+  });
+}
+
+// -- Phase 4B.5: remote setup & publish ----------------------------------------
+
+/** Map a failed `fetchRepoDetail` call to a stable Git error. */
+function mapDetailError(detail: {
+  error: { status: number; rateLimited: boolean } | null;
+}): GitError {
+  const status = detail.error?.status ?? 0;
+  if (status === 404) {
+    // GitHub answers 404 for missing AND unauthorized repos alike.
+    return new GitError(
+      "GIT_REMOTE_UNAVAILABLE",
+      "GitHub repository is unavailable or not accessible with this authorization.",
+    );
+  }
+  if (status === 401 || status === 403) {
+    return new GitError(
+      "GIT_GITHUB_REAUTH_REQUIRED",
+      "GitHub authentication is required for remote operations. Reconnect GitHub and retry.",
+    );
+  }
+  if (detail.error?.rateLimited) {
+    return new GitError("GIT_REMOTE_UNAVAILABLE", "GitHub rate limit reached. Try again shortly.");
+  }
+  return new GitError("GIT_REMOTE_UNAVAILABLE", "Could not reach GitHub. Try again shortly.");
+}
+
+function reauthError(): GitError {
+  return new GitError(
+    "GIT_GITHUB_REAUTH_REQUIRED",
+    "GitHub authentication is required for remote operations. Reconnect GitHub and retry.",
+  );
+}
+
+interface VerifiedBinding {
+  githubRepoId: string;
+  owner: string;
+  repo: string;
+  fullName: string;
+  private: boolean;
+  canRead: boolean;
+  canWrite: boolean;
+  canAdmin: boolean;
+  defaultBranch: string | null;
+}
+
+/**
+ * Persist a server-verified GitHub binding onto an existing GitRepository
+ * row. The identity ALWAYS comes from a live GitHub API response — never
+ * from browser input. importRoot/currentBranch are preserved untouched.
+ */
+async function persistVerifiedBinding(
+  linkId: string,
+  fallbackDefaultBranch: string,
+  verified: VerifiedBinding,
+): Promise<void> {
+  await prisma.gitRepository.update({
+    where: { id: linkId },
+    data: {
+      githubRepoId: verified.githubRepoId,
+      owner: verified.owner,
+      repo: verified.repo,
+      fullName: verified.fullName,
+      private: verified.private,
+      canRead: verified.canRead,
+      canWrite: verified.canWrite,
+      canAdmin: verified.canAdmin,
+      defaultBranch: verified.defaultBranch ?? fallbackDefaultBranch,
+      lastVerifiedAt: new Date(),
+    },
+  });
+}
+
+/**
+ * Best-effort remote state after a successful attach/publish. The binding
+ * is already persisted at this point, so a state-read failure must not
+ * fail the operation — the panel reloads it on refresh.
+ */
+async function remoteStateAfterSetup(
+  projectId: string,
+  user: SessionUser,
+  fallbackRemote: { owner: string; repo: string; fullName: string | null; url: string },
+): Promise<RemoteStateDto> {
+  try {
+    return await getRemoteState(projectId, user);
+  } catch {
+    return {
+      capability: "REMOTE_UNAVAILABLE",
+      remote: fallbackRemote,
+      permissions: null,
+      importRootKnown: true,
+    };
+  }
+}
+
+/**
+ * Attach a local-only project to an EXISTING GitHub repository.
+ *
+ * Server-verified flow: re-fetch repository metadata, enforce write
+ * permission, probe remote emptiness, configure the derived origin, and
+ * refuse incompatible non-empty histories (no merge, no rebase, no force
+ * push — ever). Attaching never pushes: the user clicks Push explicitly.
+ */
+export async function attachRemoteProject(
+  projectId: string,
+  user: SessionUser,
+  input: AttachRemoteInput,
+): Promise<AttachRemoteResult> {
+  if (!isValidRepoSegment(input.owner) || !isValidRepoSegment(input.repo)) {
+    throw new GitError("GIT_OPERATION_FAILED", "Invalid repository owner or name");
+  }
+  return withProjectGitLock(projectId, "attach-remote", async () => {
+    await ensureRepository(projectId, user, { createLocalIfMissing: true });
+    const link = await requireLink(projectId);
+    if (link.owner && link.repo) {
+      if (
+        link.owner.toLowerCase() === input.owner.toLowerCase() &&
+        link.repo.toLowerCase() === input.repo.toLowerCase()
+      ) {
+        // Idempotent retry: the exact same verified repository.
+        const remote = await getRemoteState(projectId, user);
+        return { attached: true, empty: false, branch: link.currentBranch, remote };
+      }
+      throw new GitError(
+        "GIT_REMOTE_ALREADY_CONFIGURED",
+        `This project is already connected to ${link.owner}/${link.repo}.`,
+      );
+    }
+    requireKnownImportRoot(link);
+    const token = await getGitHubToken(user.id);
+    if (!token) throw reauthError();
+
+    const detail = await fetchRepoDetail(token, input.owner, input.repo);
+    if (detail.error || !detail.repo) throw mapDetailError(detail);
+    const repo = detail.repo;
+    if (!repo.access.canWrite) {
+      throw new GitError(
+        "GIT_REMOTE_NOT_WRITABLE",
+        "Push requires write access to this repository. Choose a repository you can write to.",
+      );
+    }
+    // Canonical identity from GitHub (correct owner/name casing included).
+    const verified: VerifiedBinding = {
+      githubRepoId: String(repo.id),
+      owner: repo.owner.login,
+      repo: repo.name,
+      fullName: repo.fullName,
+      private: repo.private,
+      canRead: repo.access.canRead,
+      canWrite: repo.access.canWrite,
+      canAdmin: repo.access.canAdmin,
+      defaultBranch: repo.defaultBranch,
+    };
+    const url = `https://${getGitHubHost()}/${verified.owner}/${verified.repo}.git`;
+    const dir = worktreeDirFor(link.id);
+
+    // Probe first (read-only): null HEAD means an empty repository.
+    const remoteHead = await lsRemoteHead(url, gitAuthEnv(token));
+    // Config-only from here: no network, no worktree changes.
+    await setRemoteUrl(dir, url);
+    let persisted = false;
+    try {
+      if (remoteHead === null) {
+        await persistVerifiedBinding(link.id, link.defaultBranch, verified);
+        persisted = true;
+        // Aligned-by-construction: the first push creates the remote
+        // history, so the synthetic→clone migration must never rebuild
+        // this worktree (see ensureGitHubClone callers).
+        await setCloneMarker(dir);
+        const branch = await currentBranch(dir).catch(() => link.currentBranch);
+        const remote = await remoteStateAfterSetup(projectId, user, {
+          owner: verified.owner,
+          repo: verified.repo,
+          fullName: verified.fullName,
+          url,
+        });
+        return { attached: true, empty: true, branch, remote };
+      }
+      // Non-empty remote: fetch (refs only) + ancestry compatibility.
+      await fetchOrigin(dir, gitAuthEnv(token));
+      const branch = await currentBranch(dir).catch(() => link.currentBranch);
+      const localHead = await revparseHead(dir);
+      if (!localHead) {
+        throw new GitError(
+          "GIT_BOOTSTRAP_FAILED",
+          "Local repository has no commits. Re-initialize and retry.",
+        );
+      }
+      const remoteRef =
+        (await tryRevparse(dir, `origin/${branch}`)) ??
+        (verified.defaultBranch ? await tryRevparse(dir, `origin/${verified.defaultBranch}`) : null);
+      if (remoteRef) {
+        // Either direction of ancestry is safe (fast-forward push or
+        // fast-forward pull possible). Anything else is unrelated history.
+        const pushSafe = await isAncestor(dir, remoteRef, localHead);
+        const pullSafe = await isAncestor(dir, localHead, remoteRef);
+        if (!pushSafe && !pullSafe) {
+          throw new GitError(
+            "GIT_REMOTE_HISTORY_CONFLICT",
+            "This GitHub repository already contains unrelated history. " +
+              "Attaching it would require merging or overwriting, which the IDE never does automatically. " +
+              "Use an empty repository instead.",
+          );
+        }
+      }
+      // No origin/<branch> yet: push will create the branch ref — safe.
+      await persistVerifiedBinding(link.id, link.defaultBranch, verified);
+      persisted = true;
+      await setCloneMarker(dir);
+      const remote = await remoteStateAfterSetup(projectId, user, {
+        owner: verified.owner,
+        repo: verified.repo,
+        fullName: verified.fullName,
+        url,
+      });
+      return { attached: true, empty: false, branch, remote };
+    } finally {
+      // A refused/failed attach must leave no origin behind: the row is
+      // still local-only, and a stale origin would confuse the next attempt.
+      if (!persisted) {
+        await removeRemote(dir).catch(() => null);
+      }
+    }
+  });
+}
+
+/**
+ * Publish a local-only project as a NEW GitHub repository.
+ *
+ * Sequence: validate → create (personal or org) → attach verified binding
+ * → initial push of the current branch. Publish semantics include the
+ * first push because the repository was just created empty by this flow.
+ * If creation succeeds but linking fails, the GitHub repository is left
+ * in place (recoverable via Add Remote) — never auto-deleted.
+ */
+export async function publishProject(
+  projectId: string,
+  user: SessionUser,
+  input: PublishInput,
+): Promise<PublishResult> {
+  if (!isValidRepoName(input.name)) {
+    throw new GitError("GIT_OPERATION_FAILED", "Invalid repository name");
+  }
+  const organization =
+    typeof input.organization === "string" && input.organization.length > 0
+      ? input.organization
+      : null;
+  if (organization && !isValidRepoSegment(organization)) {
+    throw new GitError("GIT_OPERATION_FAILED", "Invalid organization");
+  }
+  return withProjectGitLock(projectId, "publish", async () => {
+    await ensureRepository(projectId, user, { createLocalIfMissing: true });
+    const link = await requireLink(projectId);
+    if (link.owner && link.repo) {
+      throw new GitError(
+        "GIT_REMOTE_ALREADY_CONFIGURED",
+        `This project is already connected to ${link.owner}/${link.repo}.`,
+      );
+    }
+    requireKnownImportRoot(link);
+    const token = await getGitHubToken(user.id);
+    if (!token) throw reauthError();
+
+    // Organization membership is validated against the live GitHub org
+    // list — the browser's org string is never trusted on its own.
+    let orgLogin: string | null = null;
+    if (organization) {
+      const orgs = await listUserOrgs(token);
+      if (orgs.error) {
+        const status = orgs.error.status;
+        if (status === 401 || status === 403) throw reauthError();
+        throw new GitError(
+          "GITHUB_REPO_CREATE_FAILED",
+          "Could not verify organization access. Try again shortly.",
+        );
+      }
+      const match = orgs.orgs.find((o) => o.toLowerCase() === organization.toLowerCase());
+      if (!match) {
+        throw new GitError(
+          "GITHUB_REPO_CREATE_DENIED",
+          "This GitHub account cannot create repositories in that organization.",
+        );
+      }
+      orgLogin = match;
+    }
+
+    const created = orgLogin
+      ? await createOrgRepo(token, orgLogin, {
+          name: input.name,
+          description: normalizePublishDescription(input.description),
+          private: input.private,
+        })
+      : await createUserRepo(token, {
+          name: input.name,
+          description: normalizePublishDescription(input.description),
+          private: input.private,
+        });
+    if (created.error || !created.repo) {
+      const status = created.error?.status ?? 0;
+      if (status === 422) {
+        throw new GitError(
+          "GITHUB_REPO_ALREADY_EXISTS",
+          `A repository named "${input.name}" already exists on this ${orgLogin ? "organization" : "account"}. Choose another name or attach it via Add Remote.`,
+        );
+      }
+      if (status === 401) throw reauthError();
+      if (status === 403 || status === 404) {
+        throw new GitError(
+          "GITHUB_REPO_CREATE_DENIED",
+          "GitHub denied repository creation for this account.",
+        );
+      }
+      throw new GitError(
+        "GITHUB_REPO_CREATE_FAILED",
+        "Could not create the GitHub repository. Try again shortly.",
+      );
+    }
+    const repo = created.repo;
+    if (!repo.access.canWrite) {
+      throw new GitError(
+        "GIT_REMOTE_NOT_WRITABLE",
+        "GitHub did not grant write access to the created repository.",
+      );
+    }
+    const verified: VerifiedBinding = {
+      githubRepoId: String(repo.id),
+      owner: repo.owner.login,
+      repo: repo.name,
+      fullName: repo.fullName,
+      private: repo.private,
+      canRead: repo.access.canRead,
+      canWrite: repo.access.canWrite,
+      canAdmin: repo.access.canAdmin,
+      defaultBranch: repo.defaultBranch,
+    };
+    const url = `https://${getGitHubHost()}/${verified.owner}/${verified.repo}.git`;
+    const dir = worktreeDirFor(link.id);
+    await setRemoteUrl(dir, url);
+    try {
+      await persistVerifiedBinding(link.id, link.defaultBranch, verified);
+    } catch {
+      await removeRemote(dir).catch(() => null);
+      throw new GitError(
+        "GIT_REMOTE_ATTACH_FAILED",
+        `Repository "${verified.fullName}" was created on GitHub, but it could not be linked to this project. ` +
+          `Attach it via Add Remote and retry — nothing was deleted.`,
+        { fullName: verified.fullName },
+      );
+    }
+    // Same alignment marker as attach: this history becomes the remote's.
+    await setCloneMarker(dir);
+
+    // Initial push (reentrant lock: same async chain). The binding stays
+    // even if the push fails — Source Control offers Push to retry.
+    let push: PushResultDto;
+    try {
+      const branch = await currentBranch(dir).catch(() => link.currentBranch);
+      push = await pushProject(projectId, user, branch);
+    } catch (err) {
+      if (err instanceof GitError) throw err;
+      throw new GitError(
+        "GIT_PUBLISH_FAILED",
+        "Repository created and linked, but the initial push failed. Push from Source Control to retry.",
+        { fullName: verified.fullName },
+      );
+    }
+    const remote = await remoteStateAfterSetup(projectId, user, {
+      owner: verified.owner,
+      repo: verified.repo,
+      fullName: verified.fullName,
+      url,
+    });
+    return { attached: true, created: true, fullName: verified.fullName, remote, push };
   });
 }
 

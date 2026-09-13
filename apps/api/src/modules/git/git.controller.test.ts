@@ -19,6 +19,8 @@ const serviceMocks = vi.hoisted(() => ({
   fetchRemote: vi.fn(),
   pullProject: vi.fn(),
   pushProject: vi.fn(),
+  attachRemoteProject: vi.fn(),
+  publishProject: vi.fn(),
   listProjectBranches: vi.fn(),
   createProjectBranch: vi.fn(),
   checkoutProjectBranch: vi.fn(),

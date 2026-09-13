@@ -44,6 +44,37 @@ export const gitPushSchema = z.object({
   branch: branchNameSchema.optional(),
 });
 
+// -- Phase 4B.5: remote setup & publish ----------------------------------------
+
+// Slug twins of repos.service:isValidRepoSegment / isValidRepoName.
+// Duplicated (not imported) so request validation never depends on the
+// GitHub API module; both sides assert the same rule and tests pin it.
+const repoSlugSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[A-Za-z0-9_.-]+$/, "Invalid GitHub owner/name")
+  .refine((v) => v !== "." && v !== "..", "Invalid GitHub owner/name");
+
+const repoNameSchema = z
+  .string()
+  .min(1)
+  .max(100)
+  .regex(/^[A-Za-z0-9._-]+$/, "Invalid repository name")
+  .refine((v) => v !== "." && v !== "..", "Invalid repository name");
+
+export const gitAttachRemoteSchema = z.object({
+  owner: repoSlugSchema,
+  repo: repoSlugSchema,
+});
+
+export const gitPublishSchema = z.object({
+  name: repoNameSchema,
+  description: z.string().max(1000).optional(),
+  private: z.boolean(),
+  organization: repoSlugSchema.nullish(),
+});
+
 export const gitHistoryQuerySchema = z.object({
   branch: z.string().max(128).optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50),
@@ -67,4 +98,6 @@ export type GitCommitInput = z.infer<typeof gitCommitSchema>;
 export type GitCreateBranchInput = z.infer<typeof gitCreateBranchSchema>;
 export type GitCheckoutInput = z.infer<typeof gitCheckoutSchema>;
 export type GitPushInput = z.infer<typeof gitPushSchema>;
+export type GitAttachRemoteInput = z.infer<typeof gitAttachRemoteSchema>;
+export type GitPublishInput = z.infer<typeof gitPublishSchema>;
 export type GitHistoryQuery = z.infer<typeof gitHistoryQuerySchema>;

@@ -18,13 +18,17 @@ import {
   getRemoteUrl,
   gitAuthEnv,
   historyFileDiff,
+  isAncestor,
   listBranches,
   logCommits,
+  lsRemoteHead,
   mergeFastForward,
   parseRenamePaths,
   pushBranch,
+  removeRemote,
   sanitizeRemoteMessage,
   setCloneMarker,
+  setRemoteUrl,
   setSparseRoot,
   tryRevparse,
   validateBranchRef,
@@ -386,5 +390,60 @@ describe("history", () => {
     expect(added.oldContent).toBeNull();
     expect(added.newContent).toBe("bee\n");
     await expect(historyFileDiff(dir, head!.sha, "nope.txt")).rejects.toMatchObject({ code: "GIT_INVALID_PATH" });
+  });
+});
+
+describe("remote setup primitives (4B.5)", () => {
+  async function localRepo(): Promise<{ dir: string; head: string }> {
+    const dir = await freshDir("vibe-local-");
+    const g = simpleGit({ baseDir: dir });
+    await g.init(["-b", "main"]);
+    await g.addConfig("user.name", "T");
+    await g.addConfig("user.email", "t@x.com");
+    await write(dir, "app.txt", "v1\n");
+    await g.add(["-A"]);
+    await g.commit("initial");
+    const head = (await g.revparse(["HEAD"])).trim();
+    return { dir, head };
+  }
+
+  it("setRemoteUrl adds then replaces origin; removeRemote rolls back", async () => {
+    const { dir } = await localRepo();
+    expect(await getRemoteUrl(dir)).toBeNull();
+    await setRemoteUrl(dir, "https://github.com/acme/demo.git");
+    expect(await getRemoteUrl(dir)).toBe("https://github.com/acme/demo.git");
+    await setRemoteUrl(dir, "https://github.com/acme/other.git");
+    expect(await getRemoteUrl(dir)).toBe("https://github.com/acme/other.git");
+    await removeRemote(dir);
+    expect(await getRemoteUrl(dir)).toBeNull();
+    // Removing a missing origin is success (idempotent rollback).
+    await removeRemote(dir);
+    await expect(setRemoteUrl(dir, "ssh://evil/x.git")).rejects.toMatchObject({
+      code: "GIT_OPERATION_FAILED",
+    });
+  });
+
+  it("lsRemoteHead resolves HEAD, null for empty repositories", async () => {
+    const { bare } = await seedBareOrigin();
+    const head = await lsRemoteHead(bare, gitAuthEnv(null));
+    expect(head).toMatch(/^[0-9a-f]{40}$/);
+    const empty = await freshDir("vibe-empty-");
+    await simpleGit({ baseDir: empty }).raw(["init", "--bare", empty]);
+    await expect(lsRemoteHead(empty, gitAuthEnv(null))).resolves.toBeNull();
+  });
+
+  it("isAncestor answers ancestry without touching refs", async () => {
+    const { dir, head: first } = await localRepo();
+    const g = simpleGit({ baseDir: dir });
+    await write(dir, "app.txt", "v2\n");
+    await g.add(["-A"]);
+    await g.commit("second");
+    const second = (await g.revparse(["HEAD"])).trim();
+    expect(await isAncestor(dir, first, second)).toBe(true);
+    expect(await isAncestor(dir, second, first)).toBe(false);
+    expect(await isAncestor(dir, second, second)).toBe(true);
+    await expect(isAncestor(dir, "not-a-sha", second)).rejects.toMatchObject({
+      code: "GIT_OPERATION_FAILED",
+    });
   });
 });

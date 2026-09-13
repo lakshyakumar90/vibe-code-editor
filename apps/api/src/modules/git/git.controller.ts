@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 import { z } from "zod";
 import { GitError } from "./git.errors";
 import {
+  attachRemoteProject,
   checkoutProjectBranch,
   commitProject,
   createProjectBranch,
@@ -15,6 +16,7 @@ import {
   getProjectStatus,
   getRemoteState,
   listProjectBranches,
+  publishProject,
   pullProject,
   pushProject,
   stageAllPaths,
@@ -23,6 +25,7 @@ import {
   unstageProjectPaths,
 } from "./git.service";
 import {
+  gitAttachRemoteSchema,
   gitCheckoutSchema,
   gitCommitSchema,
   gitCommitShaParamSchema,
@@ -31,6 +34,7 @@ import {
   gitHistoryDiffQuerySchema,
   gitHistoryQuerySchema,
   gitPathsSchema,
+  gitPublishSchema,
   gitPushSchema,
 } from "./git.validation";
 
@@ -173,6 +177,33 @@ export const gitController = {
       const { projectId } = req.params;
       const state = await getRemoteState(projectId as string, sessionUser(req));
       res.json({ success: true, data: state });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async attachRemote(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const input = gitAttachRemoteSchema.parse(req.body);
+      const result = await attachRemoteProject(projectId as string, sessionUser(req), input);
+      res.json({ success: true, data: result });
+    } catch (err) {
+      sendGitError(res, err);
+    }
+  },
+
+  async publish(req: Request, res: Response) {
+    try {
+      const { projectId } = req.params;
+      const input = gitPublishSchema.parse(req.body);
+      const result = await publishProject(projectId as string, sessionUser(req), {
+        name: input.name,
+        ...(input.description !== undefined ? { description: input.description } : {}),
+        private: input.private,
+        organization: input.organization ?? null,
+      });
+      res.status(201).json({ success: true, data: result });
     } catch (err) {
       sendGitError(res, err);
     }
