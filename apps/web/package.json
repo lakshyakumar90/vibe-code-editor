@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev --port 3000",
-    "build": "next build",
+    "build": "node scripts/build-git-shim.mjs && next build",
+    "shim:build": "node scripts/build-git-shim.mjs",
     "start": "next start",
     "lint": "eslint --max-warnings 0",
     "check-types": "next typegen && tsc --noEmit",
@@ -25,6 +26,7 @@
     "@xterm/xterm": "^6.0.0",
     "better-auth": "^1.6.24",
     "clsx": "^2.1.1",
+    "isomorphic-git": "^1.42.2",
     "lucide-react": "^1.26.0",
     "monaco-editor": "^0.56.0",
     "next": "16.2.0",
@@ -47,6 +49,7 @@
     "@types/node": "^22.15.3",
     "@types/react": "19.2.2",
     "@types/react-dom": "19.2.2",
+    "esbuild": "^0.28.2",
     "eslint": "^9.39.1",
     "typescript": "5.9.2",
     "vitest": "^3.2.4"

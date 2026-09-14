@@ -6,9 +6,32 @@ import type { TemplateId } from "@repo/templates/runtime";
 import { normalizeDbPath } from "@/lib/workspace/paths";
 import { getWebContainer } from "./client";
 import { toFileSystemTree } from "./files";
+import {
+  parseGitVersion,
+  shouldUseGitShim,
+  type NativeGitProbe,
+} from "./git-capability";
+import { splitCommand } from "./terminal-git";
 import type { ContainerDbFile } from "./types";
 
 export type { TemplateId };
+export type { NativeGitProbe };
+export { shouldUseGitShim };
+
+export interface TerminalGitIdentity {
+  name?: string;
+  email?: string;
+}
+
+export interface TerminalGitResult {
+  exitCode: number;
+  output: string;
+}
+
+/** Container path of the bundled shim (hidden dir, never synced to DB). */
+export const TERMINAL_GIT_SHIM_PATH = ".vibe/git-shim.cjs";
+const TERMINAL_GIT_URL = "/vibe/git-shim.cjs";
+const TERMINAL_GIT_TIMEOUT_MS = 60_000;
 export type OutputHandler = (data: string) => void;
 
 const TEMPLATE_IDS: readonly TemplateId[] = [
@@ -40,31 +63,10 @@ export interface ShellHandle {
 }
 
 /**
- * Minimal shell-like splitter: whitespace-separated, honoring single and
- * double quotes (no escapes, no operators — one command only).
+ * Shell splitter lives in terminal-git.ts (dependency-free, unit-tested);
+ * re-exported here so existing importers keep working.
  */
-export function splitCommand(command: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let quote: string | null = null;
-  for (const ch of command.trim()) {
-    if (quote) {
-      if (ch === quote) quote = null;
-      else cur += ch;
-    } else if (ch === '"' || ch === "'") {
-      quote = ch;
-    } else if (/\s/.test(ch)) {
-      if (cur) {
-        out.push(cur);
-        cur = "";
-      }
-    } else {
-      cur += ch;
-    }
-  }
-  if (cur) out.push(cur);
-  return out;
-}
+export { splitCommand } from "./terminal-git";
 
 async function pipeOutput(
   stream: ReadableStream<string>,
@@ -92,6 +94,8 @@ export class ProjectRuntime {
   private portUnsub: (() => void) | null = null;
   private devProcess: WebContainerProcess | null = null;
   private devOutput: OutputHandler | undefined;
+  /** Cached `git --version` probe; reset on teardown (container is gone). */
+  private nativeGitProbe: NativeGitProbe | null = null;
   readonly template: TemplateId;
 
   constructor(template: TemplateId = "REACT") {
@@ -149,6 +153,165 @@ export class ProjectRuntime {
       return await container.fs.readFile(normalizeDbPath(dbPath), "utf-8");
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Future-proofing probe: does this WebContainer release ship a native `git`
+   * binary? Spawns `git --version` once per container (cached), with a short
+   * timeout so a missing binary never blocks boot. Never throws — returns
+   * `{ available: false, version: null }` on any failure (spawn error,
+   * non-zero exit, unparsable output, timeout).
+   *
+   * When `available` is true, the JS git shim must disable itself and defer
+   * to the real CLI (see `shouldUseGitShim`). Fire-and-forget from the boot
+   * path; diagnostic only.
+   */
+  async probeNativeGit(timeoutMs = 10_000): Promise<NativeGitProbe> {
+    if (this.nativeGitProbe) return this.nativeGitProbe;
+    const unavailable: NativeGitProbe = { available: false, version: null };
+    try {
+      const container = await this.boot();
+      const proc = await container.spawn("git", ["--version"]);
+      let output = "";
+      const reader = proc.output.getReader();
+      const collect = (async () => {
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (output.length < 500) output += value;
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      })();
+      const timeout = new Promise<"timeout">((resolve) =>
+        setTimeout(() => resolve("timeout"), timeoutMs),
+      );
+      const exit = await Promise.race([proc.exit, timeout]);
+      if (exit === "timeout") {
+        try {
+          proc.kill();
+        } catch {
+          // already exited
+        }
+        await collect.catch(() => {});
+        this.nativeGitProbe = unavailable;
+        return this.nativeGitProbe;
+      }
+      await collect;
+      const version = exit === 0 ? parseGitVersion(output) : null;
+      this.nativeGitProbe =
+        version !== null ? { available: true, version } : unavailable;
+    } catch {
+      this.nativeGitProbe = unavailable;
+    }
+    return this.nativeGitProbe;
+  }
+
+  /** Last probe result (null before the first probe settles). */
+  getNativeGitProbe(): NativeGitProbe | null {
+    return this.nativeGitProbe;
+  }
+
+  /**
+   * Ensure the terminal git shim script exists in the container FS.
+   * Fetches the bundled script (built by `pnpm shim:build`, no secrets)
+   * and writes it to the hidden `.vibe/` dir — excluded from DB sync.
+   * Throws when the bundle is missing (dev forgot `shim:build`); the
+   * terminal surfaces a one-line hint instead of failing silently.
+   */
+  async ensureGitShim(): Promise<void> {
+    const container = await this.boot();
+    try {
+      const st = await container.fs.readFile(TERMINAL_GIT_SHIM_PATH, "utf-8");
+      if (st.length > 100_000) return;
+    } catch {
+      /* missing or stale — (re)deliver below */
+    }
+    const res = await fetch(TERMINAL_GIT_URL, { cache: "force-cache" });
+    if (!res.ok) {
+      throw new Error(
+        "terminal git shim not built yet (run `pnpm --filter web shim:build`)",
+      );
+    }
+    const text = await res.text();
+    if (text.length < 100_000 || !text.includes("vibe-shim")) {
+      throw new Error("terminal git shim bundle looks invalid; rebuild it");
+    }
+    await container.fs.mkdir(".vibe", { recursive: true });
+    await container.fs.writeFile(TERMINAL_GIT_SHIM_PATH, text);
+  }
+
+  /**
+   * Run one terminal `git` shim invocation (one-shot node process).
+   * Only identity env is forwarded — never tokens or server git config.
+   * Resolves with exit code + combined output; rejects on timeout/spawn
+   * failure. Callers trigger a container→DB rescan for mutating commands.
+   */
+  async runTerminalGit(
+    argv: string[],
+    identity: TerminalGitIdentity = {},
+    onOutput?: OutputHandler,
+  ): Promise<TerminalGitResult> {
+    await this.ensureGitShim();
+    const container = await this.boot();
+    const env: Record<string, string> = {};
+    if (identity.name) env["VIBE_GIT_NAME"] = identity.name;
+    if (identity.email) env["VIBE_GIT_EMAIL"] = identity.email;
+    const proc = await container.spawn("node", [TERMINAL_GIT_SHIM_PATH, ...argv], {
+      cwd: "/",
+      env,
+    });
+    let output = "";
+    const OUT_CAP = 20000;
+    const collect = (chunk: string) => {
+      if (output.length < OUT_CAP) output += chunk.slice(0, OUT_CAP - output.length);
+      onOutput?.(chunk);
+    };
+    const piping = pipeOutput(proc.output, collect);
+    const exitCode = await Promise.race([
+      proc.exit,
+      new Promise<"timeout">((resolve) =>
+        setTimeout(() => resolve("timeout"), TERMINAL_GIT_TIMEOUT_MS),
+      ),
+    ]);
+    if (exitCode === "timeout") {
+      try {
+        proc.kill();
+      } catch {
+        // already exited
+      }
+      await piping;
+      throw new Error("terminal git timed out");
+    }
+    await piping;
+    return { exitCode, output };
+  }
+
+  /**
+   * Point the terminal repo's `origin` at a validated non-secret URL
+   * (called after Add Remote / Publish). Best-effort: silent no-op when
+   * the shim is unavailable or no local terminal repo exists yet.
+   */
+  async setShimRemote(url: string): Promise<void> {
+    try {
+      await this.runTerminalGit(["__sync-remote", url]);
+    } catch {
+      // terminal convenience only — server binding is authoritative
+    }
+  }
+
+  /**
+   * Idempotent local convenience repo (Strategy A): init + snapshot commit
+   * when the container has no `.git` yet. Best-effort, never throws.
+   */
+  async ensureTerminalGit(identity: TerminalGitIdentity = {}): Promise<void> {
+    try {
+      await this.runTerminalGit(["__ensure-snapshot"], identity);
+    } catch {
+      // terminal convenience only
     }
   }
 
@@ -319,6 +482,7 @@ export class ProjectRuntime {
     this.serverReadyUnsub = null;
     this.portUnsub?.();
     this.portUnsub = null;
+    this.nativeGitProbe = null;
     if (this.devProcess) {
       try {
         this.devProcess.kill();

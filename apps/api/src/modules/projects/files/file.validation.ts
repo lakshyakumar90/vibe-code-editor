@@ -10,6 +10,9 @@ const nameSchema = z
   })
   .refine((name) => name !== "." && name !== "..", {
     message: "Name cannot be '.' or '..'",
+  })
+  .refine((name) => name !== ".git", {
+    message: "Name cannot be '.git' (reserved for terminal git metadata)",
   });
 
 const parentIdSchema = z.cuid2().trim().nullable().optional();

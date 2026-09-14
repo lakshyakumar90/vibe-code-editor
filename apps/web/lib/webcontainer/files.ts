@@ -8,6 +8,11 @@ import type { ContainerDbFile } from "./types";
  * Folder rows are skipped (intermediate segments become directories
  * automatically); only real files are mounted. Mounting a folder row as a
  * file would shadow its children and break the app (ENOTDIR at runtime).
+ *
+ * Runtime metadata (`.git/**`, `.vibe/**`, `node_modules/**`) is never
+ * mounted: terminal git keeps its own local `.git` in the container, and
+ * the shim lives under `.vibe/` — neither may become File rows nor be
+ * overwritten by a mount.
  */
 export function toFileSystemTree(files: ContainerDbFile[]): FileSystemTree {
   const tree: FileSystemTree = {};
@@ -16,6 +21,8 @@ export function toFileSystemTree(files: ContainerDbFile[]): FileSystemTree {
     if (file.isFolder) continue;
     const rel = normalizeDbPath(file.path);
     if (!rel) continue;
+    const top = rel.split("/", 1)[0]!;
+    if (top === ".git" || top === ".vibe" || top === "node_modules") continue;
     const parts = rel.split("/").filter(Boolean);
     if (parts.length === 0) continue;
 

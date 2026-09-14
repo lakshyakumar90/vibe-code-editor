@@ -130,7 +130,16 @@ export function SourceControlPanel({ projectId, onOpenDiff, isPathDirty }: Sourc
   const loadRemote = useCallback(async () => {
     try {
       const next = await gitService.getRemote(projectId);
-      if (mountedRef.current) setRemote(next);
+      if (!mountedRef.current) return;
+      setRemote(next);
+      // Terminal convenience pointer (non-secret canonical URL only).
+      // Covers GitHub-imported projects on load + Add Remote/Publish
+      // (both funnel through handleRemoteSetupDone → loadRemote).
+      if (next?.remote?.url) {
+        window.dispatchEvent(
+          new CustomEvent("vibe:terminal-remote", { detail: { url: next.remote.url } }),
+        );
+      }
     } catch {
       // Remote state is progressive enhancement; status stays authoritative.
       if (mountedRef.current) setRemote(null);

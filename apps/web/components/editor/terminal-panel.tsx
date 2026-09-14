@@ -7,6 +7,12 @@ import "@xterm/xterm/css/xterm.css";
 import { useTheme } from "next-themes";
 import { BOOT_TERMINAL_ID, useRuntime } from "./runtime-provider";
 import type { ShellHandle } from "@/lib/webcontainer/runtime";
+import { shouldUseGitShim } from "@/lib/webcontainer/runtime";
+import {
+  isMutatingGitCommand,
+  TerminalGitInterceptor,
+} from "@/lib/webcontainer/terminal-git";
+import { AuthClient } from "@/lib/auth-client";
 
 /** Follows the app theme (next-themes): dark terminal in dark mode. */
 function terminalTheme(dark: boolean) {
@@ -56,13 +62,31 @@ export function TerminalInstance({
   /** Boot/install/dev log chunks mirrored into this shell's scrollback. */
   feedLogs?: string[];
 }) {
-  const { runtime, status, stopDev, reset, error } = useRuntime();
+  const { runtime, status, stopDev, reset, error, nativeGit } = useRuntime();
   // Ref mirrors: the mount/spawn effects must keep a fixed dep-array size
   // across renders (and HMR swaps) — React throws if it ever changes.
   const stopRef = useRef(stopDev);
   stopRef.current = stopDev;
   const statusRef = useRef(status);
   statusRef.current = status;
+  const nativeGitRef = useRef(nativeGit);
+  nativeGitRef.current = nativeGit;
+  const runtimeRef = useRef(runtime);
+  runtimeRef.current = runtime;
+  // Terminal git interception state (per shell tab).
+  const interceptorRef = useRef<TerminalGitInterceptor | null>(null);
+  if (!interceptorRef.current) {
+    interceptorRef.current = new TerminalGitInterceptor({
+      useShim: () => shouldUseGitShim(nativeGitRef.current),
+    });
+  }
+  const { data: session } = AuthClient.useSession();
+  const identityRef = useRef({ name: "", email: "" });
+  const user = session?.user as { name?: string; email?: string; id?: string } | undefined;
+  identityRef.current = {
+    name: user?.name ?? "",
+    email: user?.email ?? (user?.id ? `user-${user.id}@vibe.local` : ""),
+  };
   const { resolvedTheme } = useTheme();
   const dark = resolvedTheme === "dark";
 
@@ -121,6 +145,11 @@ export function TerminalInstance({
         }
         return;
       }
+      // Snoop input lines for terminal `git` interception. Bytes still flow
+      // to jsh untouched; when a simple `git ...` line is entered while no
+      // native git exists, the output filter (below) swallows jsh's
+      // "command not found" line and runs the shim instead.
+      interceptorRef.current?.trackInput(data);
       shellRef.current?.write(data);
     });
     const observer = new ResizeObserver(() => {
@@ -196,7 +225,38 @@ export function TerminalInstance({
     void (async () => {
       try {
         const shell = await runtime.spawnShell(term.cols, term.rows, (data) => {
-          term.write(data);
+          const interceptor = interceptorRef.current;
+          if (!interceptor) {
+            term.write(data);
+            return;
+          }
+          const { text, fired } = interceptor.filterOutput(data);
+          if (text) term.write(text);
+          if (fired) {
+            interceptor.setBusy(true);
+            const writeOut = (chunk: string) => {
+              term.write(chunk.replace(/\n/g, "\r\n"));
+            };
+            void runtimeRef.current
+              .runTerminalGit(fired, identityRef.current, writeOut)
+              .then(
+                () => {
+                  window.dispatchEvent(
+                    new CustomEvent("vibe:terminal-git", {
+                      detail: { mutating: isMutatingGitCommand(fired) },
+                    }),
+                  );
+                },
+                (e: unknown) => {
+                  writeOut(
+                    `\r\n[terminal git] ${e instanceof Error ? e.message : "shim failed"}\r\n`,
+                  );
+                },
+              )
+              .finally(() => {
+                interceptor.setBusy(false);
+              });
+          }
         });
         shellRef.current = shell;
         void shell.onExit.then(() => {

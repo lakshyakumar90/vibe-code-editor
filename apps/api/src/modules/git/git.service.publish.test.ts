@@ -547,4 +547,35 @@ describe("publishProject", () => {
       publishProject("p1", USER, { name: "x", private: true }),
     ).rejects.toMatchObject({ code: "GIT_GITHUB_REAUTH_REQUIRED" });
   });
+
+  it("heals a legacy NULL importRoot on publish (new repo: no wrong-path risk)", async () => {
+    dbLink = { ...localLink(), importRoot: null };
+    currentOriginUrl = "https://github.com/acme/newthing.git";
+    createUserMock.mockResolvedValue({ repo: createdDto("acme/newthing"), scopes: "repo", error: null });
+    const result = await publishProject("p1", USER, { name: "newthing", private: true });
+    expect(result).toMatchObject({ attached: true, created: true, fullName: "acme/newthing" });
+    expect(dbLink.importRoot).toBe("");
+    expect(result.push).toMatchObject({ pushed: true, branch: "main" });
+  });
+
+  it("heals a legacy NULL importRoot when attaching an empty repository", async () => {
+    dbLink = { ...localLink(), importRoot: null };
+    remoteMocks.lsRemoteHead.mockResolvedValue(null);
+    const result = await attachRemoteProject("p1", USER, { owner: "acme", repo: "demo" });
+    expect(result).toMatchObject({ attached: true, empty: true });
+    expect(dbLink.importRoot).toBe("");
+    expect(dbLink.fullName).toBe("acme/demo");
+  });
+
+  it("still blocks attaching a non-empty repository with unknown importRoot", async () => {
+    dbLink = { ...localLink(), importRoot: null };
+    remoteMocks.lsRemoteHead.mockResolvedValue(REMOTE_SHA);
+    await expect(
+      attachRemoteProject("p1", USER, { owner: "acme", repo: "demo" }),
+    ).rejects.toMatchObject({ code: "GIT_IMPORT_ROOT_UNKNOWN" });
+    // Rollback preserved: no origin left behind, row stays local-only.
+    expect(remoteMocks.removeRemote).toHaveBeenCalled();
+    expect(dbLink.owner).toBeNull();
+    expect(dbLink.importRoot).toBeNull();
+  });
 });

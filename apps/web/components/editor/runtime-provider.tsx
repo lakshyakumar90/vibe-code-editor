@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { ProjectRuntime } from "@/lib/webcontainer/runtime";
+import type { NativeGitProbe } from "@/lib/webcontainer/runtime";
 import { describeBootFailure, resetWebContainerCache } from "@/lib/webcontainer/client";
 import type { TemplateId } from "@/lib/webcontainer/runtime";
 import { TEMPLATE_RUNTIME } from "@repo/templates/runtime";
@@ -20,6 +21,12 @@ interface RuntimeContextValue {
   previewUrl: string | null;
   logs: string[];
   error: string | null;
+  /**
+   * Native-`git` probe result. Null until the fire-and-forget probe settles.
+   * When `available`, the future JS git shim must disable itself and defer
+   * to the real CLI. Diagnostic only — never blocks boot or surfaces errors.
+   */
+  nativeGit: NativeGitProbe | null;
   bootAndMount: (files: ContainerDbFile[]) => Promise<void>;
   /** `npm install && npm run dev` as managed processes (echoed to logs). */
   runBootChain: () => Promise<void>;
@@ -58,6 +65,7 @@ export function RuntimeProvider({
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
   const [logs, setLogs] = React.useState<string[]>([]);
   const [error, setError] = React.useState<string | null>(null);
+  const [nativeGit, setNativeGit] = React.useState<NativeGitProbe | null>(null);
 
   const bootedRef = React.useRef(false);
   const statusRef = React.useRef(status);
@@ -95,6 +103,15 @@ export function RuntimeProvider({
         }
         setStatus("mounting");
         await runtime.mount(files);
+        // Future-proofing probe (fire-and-forget): records whether this
+        // WebContainer release ships a native `git` binary. Never blocks
+        // boot, never surfaces errors — diagnostic only.
+        void runtime
+          .probeNativeGit()
+          .then(setNativeGit)
+          .catch(() => {
+            // probeNativeGit never rejects; belt-and-braces only
+          });
         runtime.onServerReady((_port, url) => {
           setPreviewUrl(url);
           setStatus("ready");
@@ -213,6 +230,7 @@ export function RuntimeProvider({
     setError(null);
     setPreviewUrl(null);
     setLogs([]);
+    setNativeGit(null);
     setStatus("idle");
   }, []);
 
@@ -223,6 +241,7 @@ export function RuntimeProvider({
       previewUrl,
       logs,
       error,
+      nativeGit,
       bootAndMount,
       runBootChain,
       restartDev,
@@ -236,6 +255,7 @@ export function RuntimeProvider({
       previewUrl,
       logs,
       error,
+      nativeGit,
       bootAndMount,
       runBootChain,
       restartDev,

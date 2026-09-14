@@ -12,6 +12,11 @@ import { getFileIcon, getLanguage } from "@/lib/file-icons";
 import { createWorkspace, type VirtualWorkspace } from "@/lib/workspace/workspace";
 import { buildPathToId } from "@/lib/workspace/file-map";
 import { hashPackageJson } from "@/lib/webcontainer/dependency-state";
+import {
+  applyContainerDiff,
+  diffContainerFiles,
+  scanContainerFiles,
+} from "@/lib/webcontainer/container-sync";
 import { removeModelByPath } from "@/lib/language/model-manager";
 import { CollabBridge, type CollabBridgeHandle } from "./collab-bridge";
 import { SourceControlPanel } from "./source-control-panel";
@@ -267,6 +272,9 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       try {
         await bootAndMount(snapshot.map((f) => ({ path: f.path, content: f.content, isFolder: f.isFolder })));
         containerReadyRef.current = true;
+        // Terminal git convenience repo (Strategy A: local-only snapshot,
+        // never the authoritative server repo). Background, best-effort.
+        void runtime.ensureTerminalGit().catch(() => undefined);
         const packageJson =
           workspaceRef.current?.getFile("package.json") ?? "";
         depHashRef.current = hashPackageJson(packageJson);
@@ -792,6 +800,69 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       arr.filter((f) => !f.isFolder && wanted.has(f.id)).map((f) => f.path),
     );
   }, [refresh, handleGitFilesChanged]);
+
+  // Terminal git: after a workdir-mutating shim command (checkout/restore/
+  // reset/switch/init), pull container files back through the File API, then
+  // converge Monaco/Yjs/tree via the same path as server-git changes.
+  // Deletes additionally drop local models/workspace entries (refresh()
+  // already evicts them from open files + active selection).
+  const terminalSyncInFlightRef = useRef(false);
+  const handleTerminalFilesChanged = useCallback(async (changed: string[], deleted: string[]) => {
+    if (changed.length > 0) await handleGitFilesChanged(changed);
+    else await refresh({ silent: true });
+    for (const p of deleted) {
+      workspaceRef.current?.deleteFile(p);
+      removeModelByPath(p);
+    }
+  }, [handleGitFilesChanged, refresh]);
+
+  const syncTerminalFiles = useCallback(async () => {
+    if (!containerReadyRef.current || terminalSyncInFlightRef.current) return;
+    const container = runtime.getContainer();
+    if (!container) return;
+    terminalSyncInFlightRef.current = true;
+    try {
+      const snapshot = await scanContainerFiles(
+        async (dir) => {
+          const entries = await container.fs.readdir(dir || ".", { withFileTypes: true });
+          return entries.map((e) => ({
+            name: e.name as string,
+            isFile: e.isFile(),
+            isDirectory: e.isDirectory(),
+          }));
+        },
+        async (file) => runtime.readContainerFile(file),
+      );
+      const diff = diffContainerFiles(snapshot, filesRef.current);
+      if (diff.created.length + diff.updated.length + diff.deleted.length === 0) return;
+      const applied = await applyContainerDiff(api, projectId, filesRef.current, diff);
+      await handleTerminalFilesChanged(applied.changedPaths, applied.deletedPaths);
+    } catch {
+      toast.error("Sync from terminal failed");
+    } finally {
+      terminalSyncInFlightRef.current = false;
+    }
+  }, [runtime, projectId, handleTerminalFilesChanged]);
+
+  useEffect(() => {
+    const onTerminalGit = (e: Event) => {
+      const mutating = (e as CustomEvent).detail?.mutating === true;
+      if (!mutating) return;
+      void syncTerminalFiles().catch(() => undefined);
+    };
+    const onTerminalRemote = (e: Event) => {
+      const url = (e as CustomEvent).detail?.url;
+      if (typeof url !== "string" || !url) return;
+      // Best-effort convenience pointer; server binding stays authoritative.
+      void runtime.setShimRemote(url).catch(() => undefined);
+    };
+    window.addEventListener("vibe:terminal-git", onTerminalGit);
+    window.addEventListener("vibe:terminal-remote", onTerminalRemote);
+    return () => {
+      window.removeEventListener("vibe:terminal-git", onTerminalGit);
+      window.removeEventListener("vibe:terminal-remote", onTerminalRemote);
+    };
+  }, [syncTerminalFiles, runtime]);
 
   /** Local dirty check for the discard guard's client-side backstop. */
   const isPathDirty = useCallback((path: string): boolean => {

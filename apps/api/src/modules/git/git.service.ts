@@ -446,6 +446,23 @@ export function requireKnownImportRoot(link: { importRoot: string | null | undef
   return link.importRoot;
 }
 
+/**
+ * Legacy-row healing for flows with no wrong-path risk: publish (the remote
+ * is created empty by this flow) and attach-to-empty (the remote is empty).
+ * Backfills importRoot "" — the whole project maps to the repo root — so
+ * the follow-up push and all later remote ops see a known root. Never call
+ * for non-empty remotes: the original location genuinely matters there,
+ * and requireKnownImportRoot must keep blocking.
+ */
+async function healUnknownImportRoot(link: {
+  id: string;
+  importRoot: string | null | undefined;
+}): Promise<string> {
+  if (link.importRoot !== null && link.importRoot !== undefined) return link.importRoot;
+  await prisma.gitRepository.update({ where: { id: link.id }, data: { importRoot: "" } });
+  return "";
+}
+
 /** URL comparison tolerant to case, trailing slash, and `.git` suffix. Pure. */
 export function normalizeGitUrl(url: string): string {
   return url.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
@@ -1750,7 +1767,8 @@ export async function attachRemoteProject(
         `This project is already connected to ${link.owner}/${link.repo}.`,
       );
     }
-    requireKnownImportRoot(link);
+    // No importRoot gate here: the probe below decides. Empty remotes heal
+    // legacy rows (no wrong-path risk); non-empty remotes keep blocking.
     const token = await getGitHubToken(user.id);
     if (!token) throw reauthError();
 
@@ -1785,6 +1803,8 @@ export async function attachRemoteProject(
     let persisted = false;
     try {
       if (remoteHead === null) {
+        // Empty remote: safe to heal legacy rows (see helper docs).
+        await healUnknownImportRoot(link);
         await persistVerifiedBinding(link.id, link.defaultBranch, verified);
         persisted = true;
         // Aligned-by-construction: the first push creates the remote
@@ -1800,6 +1820,9 @@ export async function attachRemoteProject(
         });
         return { attached: true, empty: true, branch, remote };
       }
+      // Non-empty remote: the original import location genuinely matters —
+      // keep blocking legacy rows rather than risk pushing the wrong tree.
+      requireKnownImportRoot(link);
       // Non-empty remote: fetch (refs only) + ancestry compatibility.
       await fetchOrigin(dir, gitAuthEnv(token));
       const branch = await currentBranch(dir).catch(() => link.currentBranch);
@@ -1881,7 +1904,9 @@ export async function publishProject(
         `This project is already connected to ${link.owner}/${link.repo}.`,
       );
     }
-    requireKnownImportRoot(link);
+    // Publish creates a brand-new empty repo, so healing a legacy NULL root
+    // to "" is safe (whole project == repo root; see helper docs).
+    await healUnknownImportRoot(link);
     const token = await getGitHubToken(user.id);
     if (!token) throw reauthError();
 
