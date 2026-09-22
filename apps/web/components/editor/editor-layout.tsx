@@ -93,6 +93,8 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   const [sidebarWidth, setSidebarWidth] = useState(288);
   const [aiWidth, setAiWidth] = useState(340);
   const aiCollapsed = !agentOpen;
+  /** Mobile: one primary surface at a time (Files | Editor | Agent | Preview). Desktop unaffected. */
+  const [mobileMode, setMobileMode] = useState<"files" | "editor" | "agent" | "preview">("editor");
   const setAiCollapsed = useCallback(
     (v: boolean | ((prev: boolean) => boolean)) => {
       const next = typeof v === "function" ? v(!agentOpen) : v;
@@ -283,6 +285,8 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     }
     setOpenFiles((prev) => (prev.some((f) => f.id === file.id) ? prev : [...prev, file]));
     setActiveFileId(file.id);
+    // Mobile drawer: selecting a file returns to the editor surface.
+    setMobileMode("editor");
   }, [toggle]);
 
   const handleTabClick = useCallback((fileId: string) => {
@@ -1129,14 +1133,31 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       : files;
 
   return (
-    <div className="flex h-full w-full overflow-hidden">
+    <div className="flex h-full w-full flex-col overflow-hidden">
+      {/* Mobile one-surface switcher (desktop: hidden). */}
+      <nav aria-label="Editor mode" className="flex shrink-0 gap-1 border-b bg-muted/40 p-1 md:hidden">
+        {(["files", "editor", "agent", "preview"] as const).map((m) => (
+          <button
+            key={m}
+            onClick={() => {
+              setMobileMode(m);
+              if (m === "agent") onAgentChange?.(true);
+            }}
+            aria-pressed={mobileMode === m}
+            className={`flex-1 rounded-md px-2 py-1.5 text-xs font-medium capitalize ${mobileMode === m ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+          >
+            {m}
+          </button>
+        ))}
+      </nav>
+      <div className="flex h-full w-full min-h-0 flex-1 overflow-hidden">
       {/* Left agent rail — kept mounted while collapsed (hidden) so live
           runs, streams, and approvals survive closing the tab. Reopen via
           the Agent buttons in the view bar below the navbar. */}
       <>
         <aside
           style={{ width: aiWidth }}
-          className={`shrink-0 flex-col overflow-hidden border-r bg-background ${aiCollapsed ? "hidden" : "flex"}`}
+          className={`shrink-0 flex-col overflow-hidden border-r bg-background ${aiCollapsed ? "hidden" : "flex"} ${mobileMode === "agent" ? "max-md:flex" : "max-md:hidden"} md:flex`}
         >
             <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
               <span className="px-1 text-sm font-bold italic tracking-tight">vibe</span>
@@ -1189,7 +1210,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
         <>
           <aside
             style={{ width: sidebarWidth }}
-            className="shrink-0 border-r flex flex-col overflow-hidden bg-card"
+            className={`shrink-0 flex-col overflow-hidden bg-card max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-40 max-md:w-72 max-md:border-r max-md:shadow-xl md:border-r md:flex ${mobileMode === "files" ? "max-md:flex" : "max-md:hidden"}`}
           >
             <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <button
@@ -1568,6 +1589,8 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      </div>
     </div>
   );
 }
