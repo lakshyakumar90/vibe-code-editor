@@ -20,6 +20,7 @@
     "@repo/ui": "workspace:*",
     "@repo/validation": "workspace:*",
     "@tailwindcss/postcss": "^4.3.3",
+    "@tanstack/react-query": "^5.103.2",
     "@webcontainer/api": "^1.6.4",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
