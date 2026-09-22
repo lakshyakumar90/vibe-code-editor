@@ -8,6 +8,7 @@ import {
   Clock3,
   FolderKanban,
   LayoutTemplate,
+  Settings,
   Star,
 } from "lucide-react";
 
@@ -50,6 +51,11 @@ const items = [
     title: "Templates",
     url: "/dashboard/templates",
     icon: LayoutTemplate,
+  },
+  {
+    title: "Settings",
+    url: "/dashboard/settings",
+    icon: Settings,
   },
 ];
 

@@ -1157,7 +1157,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       <>
         <aside
           style={{ width: aiWidth }}
-          className={`shrink-0 flex-col overflow-hidden border-r bg-background ${aiCollapsed ? "hidden" : "flex"} ${mobileMode === "agent" ? "max-md:flex" : "max-md:hidden"} md:flex`}
+          className={`shrink-0 flex-col overflow-hidden border-r bg-background md:flex ${aiCollapsed ? "md:hidden" : ""} ${mobileMode === "agent" ? "flex max-md:w-full max-md:flex-1" : "max-md:hidden"}`}
         >
             <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
               <span className="px-1 text-sm font-bold italic tracking-tight">vibe</span>
@@ -1203,7 +1203,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
               document.addEventListener("mousemove", move);
               document.addEventListener("mouseup", up);
             }}
-            className={`w-1 shrink-0 cursor-col-resize transition-colors hover:bg-primary/20 ${aiCollapsed ? "hidden" : ""}`}
+            className={`w-1 shrink-0 cursor-col-resize transition-colors hover:bg-primary/20 max-md:hidden ${aiCollapsed ? "hidden" : ""}`}
           />
         </>
       {view === "code" && !sidebarCollapsed && (
@@ -1284,14 +1284,14 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
         </>
       )}
 
-      <main className="min-w-0 flex flex-1 flex-col overflow-hidden bg-background">
+      <main className={`min-w-0 flex-1 flex-col overflow-hidden bg-background max-md:w-full md:flex ${mobileMode === "editor" || mobileMode === "preview" ? "max-md:flex" : "max-md:hidden"}`}>
         {/* Both views stay mounted so the preview iframe never reloads
             and terminal shells survive Code <-> Preview switches. Only
             visibility toggles. */}
-        <div className={`min-h-0 flex-1 ${view === "preview" ? "" : "hidden"}`}>
+        <div className={`min-h-0 flex-1 ${view === "preview" ? "max-md:flex" : "hidden"} ${mobileMode === "preview" ? "max-md:flex" : "max-md:hidden"} md:flex`}>
           <PreviewPanel fullscreen />
         </div>
-        <div className={`flex min-h-0 flex-1 flex-col ${view === "code" ? "" : "hidden"}`}>
+        <div className={`flex min-h-0 flex-1 flex-col ${view === "code" ? "md:flex" : "hidden"} ${mobileMode === "editor" ? "max-md:flex" : "max-md:hidden"}`}>
         {sidebarCollapsed && (
           <div className="flex h-9 shrink-0 items-center border-b bg-muted/40 px-2">
             <button

@@ -13,7 +13,7 @@ export default function TemplatesPage() {
       <p className="mt-1 text-sm text-muted-foreground">Six supported stacks. Pick one to create a project.</p>
       <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
         {TEMPLATE_CATALOG.map((t) => (
-          <div key={t.id} className="flex flex-col rounded-xl border p-5">
+          <div key={t.id} className="flex h-full flex-col rounded-xl border p-5">
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-lg font-bold" aria-hidden>
               {t.name[0]}
             </div>
@@ -30,12 +30,13 @@ export default function TemplatesPage() {
                 <li key={f} className="font-mono">• {f}</li>
               ))}
             </ul>
+            <div className="flex-1" />
             <button
               onClick={() => {
                 setPreset(t.id);
                 setOpen(true);
               }}
-              className="mt-4 rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground"
+              className="mt-4 w-full rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground"
             >
               Create Project
             </button>

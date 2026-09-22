@@ -95,10 +95,10 @@ export function CreateProjectWizard({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="no-scrollbar max-h-[90dvh] w-[calc(100vw-2rem)] max-w-lg overflow-y-auto p-6">
+      <DialogContent className="no-scrollbar max-h-[90dvh] w-[calc(100vw-2rem)] overflow-y-auto p-4 sm:max-w-2xl sm:p-6 lg:max-w-3xl">
         <DialogHeader>
           <DialogTitle>Create project</DialogTitle>
-          <ol className="mt-2 flex items-center gap-1 text-xs" aria-label="Progress">
+          <ol className="mt-2 flex flex-wrap items-center gap-1 text-xs" aria-label="Progress">
             {STEPS.map((s, i) => (
               <li key={s} className="flex items-center gap-1">
                 <span
