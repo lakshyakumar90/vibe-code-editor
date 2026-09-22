@@ -7,6 +7,9 @@ import { auth } from "@repo/auth";
 import cors from "cors";
 import { projectRouter } from "./modules/projects/project.routes";
 import { aiRouter } from "./modules/ai/ai.routes";
+import { githubRouter } from "./modules/github/github.routes";
+import { templatesRouter } from "./modules/templates/templates.routes";
+import { usersRouter } from "./modules/users/users.routes";
 import { errorHandler } from "./middleware/error.middleware";
 import { attachCollabServer } from "./modules/collab/collab.server";
 const app = express();
@@ -34,6 +37,9 @@ app.get("/", (req, res) => {
 
 app.use("/api/projects", projectRouter);
 app.use("/api/ai", aiRouter);
+app.use("/api/github", githubRouter);
+app.use("/api/templates", templatesRouter);
+app.use("/api/users", usersRouter);
 
 app.use(errorHandler);
 
