@@ -1,6 +1,13 @@
 import { ProjectRole } from "@repo/db";
 import type { CreateProjectInput, UpdateProjectInput } from "./project.types";
 import { ProjectRepository } from "./project.repository";
+import { RedisService } from "../../lib/redis.js";
+import {
+  CacheKeys,
+  TTL,
+  invalidateProject,
+  invalidateUserProjects,
+} from "../../lib/cache-keys.js";
 
 export const projectService = {
   async createProject(
@@ -14,28 +21,39 @@ export const projectService = {
       ownerId: userId,
       memberIds: input.memberIds,
     });
+    await invalidateUserProjects(userId);
 
     return project;
   },
 
   async getAllProjectsForUser(userId: string) {
-    return ProjectRepository.getAllProjectsForUser(userId);
+    return RedisService.getOrSet(CacheKeys.userProjects(userId), TTL.projects, () =>
+      ProjectRepository.getAllProjectsForUser(userId),
+    );
   },
 
   async getProjectById(projectId: string, userId?: string) {
-    return ProjectRepository.getProjectById(projectId, userId);
+    return RedisService.getOrSet(CacheKeys.projectSummary(projectId), TTL.projectSummary, () =>
+      ProjectRepository.getProjectById(projectId, userId),
+    );
   },
 
   async toggleFavorite(projectId: string, userId: string) {
-    return ProjectRepository.toggleFavorite(projectId, userId);
+    const r = await ProjectRepository.toggleFavorite(projectId, userId);
+    await invalidateProject(projectId, userId);
+    return r;
   },
 
   async updateProject(projectId: string, input: UpdateProjectInput) {
-    return ProjectRepository.updateProject(projectId, input);
+    const r = await ProjectRepository.updateProject(projectId, input);
+    await RedisService.delete(CacheKeys.projectSummary(projectId));
+    return r;
   },
 
   async deleteProject(projectId: string) {
-    return ProjectRepository.deleteProject(projectId);
+    const r = await ProjectRepository.deleteProject(projectId);
+    await RedisService.delete(CacheKeys.projectSummary(projectId));
+    return r;
   },
 
   async addMemberToProject(projectId: string, email: string, role: ProjectRole) {
