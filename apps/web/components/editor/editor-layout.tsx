@@ -1157,7 +1157,7 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
       <>
         <aside
           style={{ width: aiWidth }}
-          className={`shrink-0 flex-col overflow-hidden border-r bg-background md:flex ${aiCollapsed ? "md:hidden" : ""} ${mobileMode === "agent" ? "flex max-md:w-full max-md:flex-1" : "max-md:hidden"}`}
+          className={`shrink-0 flex-col overflow-hidden border-r bg-background ${aiCollapsed ? "md:hidden" : "md:flex"} ${mobileMode === "agent" ? "max-md:flex max-md:w-full max-md:flex-1" : "max-md:hidden"}`}
         >
             <div className="flex h-9 shrink-0 items-center gap-1 border-b px-2">
               <span className="px-1 text-sm font-bold italic tracking-tight">vibe</span>
@@ -1288,10 +1288,10 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
         {/* Both views stay mounted so the preview iframe never reloads
             and terminal shells survive Code <-> Preview switches. Only
             visibility toggles. */}
-        <div className={`min-h-0 flex-1 ${view === "preview" ? "max-md:flex" : "hidden"} ${mobileMode === "preview" ? "max-md:flex" : "max-md:hidden"} md:flex`}>
+        <div className={`hidden min-h-0 flex-1 ${view === "preview" ? "md:block" : ""} ${mobileMode === "preview" ? "max-md:block" : ""}`}>
           <PreviewPanel fullscreen />
         </div>
-        <div className={`flex min-h-0 flex-1 flex-col ${view === "code" ? "md:flex" : "hidden"} ${mobileMode === "editor" ? "max-md:flex" : "max-md:hidden"}`}>
+        <div className={`hidden min-h-0 flex-1 flex-col ${view === "code" ? "md:flex" : ""} ${mobileMode === "editor" ? "max-md:flex" : ""}`}>
         {sidebarCollapsed && (
           <div className="flex h-9 shrink-0 items-center border-b bg-muted/40 px-2">
             <button
