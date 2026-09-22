@@ -87,6 +87,7 @@ export function TerminalInstance({
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       theme: terminalTheme(document.documentElement.classList.contains("dark")),
       scrollback: 5000,
+      convertEol: true,
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -105,21 +106,19 @@ export function TerminalInstance({
     // Drain any boot logs that arrived before the terminal existed.
     logIndexRef.current = writeLogs(term, feedLogsRef.current ?? [], 0);
 
-  // Boot terminal is a read-only log surface (`~/project ❯ npm install`
-  // …output). No interactive shell here, so jsh never prints its
-  // `~/<container-id> ❯` prompt underneath the logs.
+  // Boot terminal shows the managed dev-server log AND an interactive
+  // shell below it (like VS Code): logs are printed first, then the shell
+  // takes over. Previously it was read-only, so typed commands vanished —
+  // users thought "it does not stay".
   const isBoot = id === BOOT_TERMINAL_ID;
 
     const dataDisposer = term.onData((data) => {
-      if (isBoot) {
-        // Read-only log view: Ctrl+C still stops the managed dev server.
-        if (
-          data.includes("\x03") &&
-          (statusRef.current === "ready" || statusRef.current === "starting")
-        ) {
-          stopRef.current();
-        }
-        return;
+      if (
+        data.includes("\x03") &&
+        isBoot &&
+        (statusRef.current === "ready" || statusRef.current === "starting")
+      ) {
+        stopRef.current();
       }
       shellRef.current?.write(data);
     });
@@ -177,9 +176,9 @@ export function TerminalInstance({
   }, [active]);
 
   // Spawn the shell once the container exists AND the panel is visible
-  // with sane dimensions. The boot terminal is log-only (no shell).
+  // with sane dimensions. Boot terminal also gets a shell (after its logs)
+  // so it behaves like a real terminal.
   useEffect(() => {
-    if (id === BOOT_TERMINAL_ID) return;
     if (!active || !sized) return;
     if (status === "idle" || status === "booting" || status === "error") return;
     const term = termRef.current;

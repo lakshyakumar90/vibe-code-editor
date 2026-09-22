@@ -35,7 +35,9 @@ export function stripAnsi(input: string): string {
  * real terminal. Keep that segment; drop spinner noise.
  */
 export function collapseCarriageReturns(input: string): string {
-  return input
+  // Backspaces (npm/yarn spinners overwrite with \b) act like \r.
+  const withBackspace = input.replace(/[\b\x7f]+/g, "\r");
+  return withBackspace
     .split("\n")
     .map((line) => {
       if (!line.includes("\r")) return line;
@@ -60,7 +62,14 @@ export function cleanProcessOutput(input: string): string {
   const withErasesApplied = input
     .replace(EL_PATTERN, "\r")
     .replace(ED_PATTERN, "");
-  return collapseCarriageReturns(stripAnsi(withErasesApplied));
+  const collapsed = collapseCarriageReturns(stripAnsi(withErasesApplied));
+  // npm progress leaves spinner fragments glued to real text, e.g.
+  // "\added 76 packages" or "|/-~/project 109s". Strip a leading run of
+  // spinner glyphs (| / - \ _) and stray backslash artifacts at line starts.
+  return collapsed
+    .split("\n")
+    .map((line) => line.replace(/^[\s\\|/_—–-]{1,8}(?=\S)/, ""))
+    .join("\n");
 }
 
 /**
