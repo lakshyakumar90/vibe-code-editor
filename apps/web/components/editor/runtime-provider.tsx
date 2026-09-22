@@ -148,16 +148,15 @@ export function RuntimeProvider({
       // Echoed so the boot terminal reads like a real session:
       // `~/project ❯ npm install` … output … `~/project 23s ❯ npm run dev`.
       setStatus("installing");
-      push(`~/project\n❯ ${installCommand()}\n`);
+      push(`~/project ❯ ${installCommand()}\n`);
       const t0 = Date.now();
       const code = await runtime.install(push);
       const secs = Math.max(1, Math.round((Date.now() - t0) / 1000));
-      push(`\n~/project ${secs}s\n`);
+      push(`~/project ${secs}s ❯ ${devCommand()}\n`);
       if (code !== 0) {
         throw new Error(`npm install failed with exit code ${code}`);
       }
       setStatus("starting");
-      push(`❯ ${devCommand()}\n`);
       await runtime.startDevServer(push);
       // status flips to "ready" on server-ready event
     } catch (e) {
@@ -181,7 +180,7 @@ export function RuntimeProvider({
     const push = appendLog(setLogs);
     try {
       setStatus("starting");
-      push(`❯ ${devCommand()}\n`);
+      push(`~/project ❯ ${devCommand()}\n`);
       expectCloseRef.current = true;
       await runtime.restartDevServer(push);
     } catch (e) {
@@ -196,16 +195,15 @@ export function RuntimeProvider({
     const push = appendLog(setLogs);
     try {
       setStatus("installing");
-      push(`~/project\n❯ ${installCommand()}\n`);
+      push(`~/project ❯ ${installCommand()}\n`);
       const t0 = Date.now();
       const code = await runtime.install(push);
       const secs = Math.max(1, Math.round((Date.now() - t0) / 1000));
-      push(`\n~/project ${secs}s\n`);
+      push(`~/project ${secs}s ❯ ${devCommand()}\n`);
       if (code !== 0) {
         throw new Error(`npm install failed with exit code ${code}`);
       }
       setStatus("starting");
-      push(`❯ ${devCommand()}\n`);
       expectCloseRef.current = true;
       await runtime.restartDevServer(push);
     } catch (e) {

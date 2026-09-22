@@ -49,7 +49,14 @@ vi.mock("@repo/db", () => ({
       update: dbMocks.gitRepositoryUpdate,
       create: dbMocks.gitRepositoryCreate,
     },
-    account: { findFirst: dbMocks.accountFindFirst },
+    account: {
+      findFirst: dbMocks.accountFindFirst,
+      findMany: async (...args: unknown[]) => {
+        const row = await dbMocks.accountFindFirst(...args);
+        return row ? [row] : [];
+      },
+      updateMany: vi.fn(async () => ({ count: 0 })),
+    },
     file: { findMany: dbMocks.fileFindMany },
   },
 }));

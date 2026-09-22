@@ -10,6 +10,7 @@ import type { ShellHandle } from "@/lib/webcontainer/runtime";
 import { shouldUseGitShim } from "@/lib/webcontainer/runtime";
 import {
   isMutatingGitCommand,
+  terminalGitEventFor,
   TerminalGitInterceptor,
 } from "@/lib/webcontainer/terminal-git";
 import { AuthClient } from "@/lib/auth-client";
@@ -243,7 +244,10 @@ export function TerminalInstance({
                 () => {
                   window.dispatchEvent(
                     new CustomEvent("vibe:terminal-git", {
-                      detail: { mutating: isMutatingGitCommand(fired) },
+                      detail: {
+                        mutating: isMutatingGitCommand(fired),
+                        ...terminalGitEventFor(fired),
+                      },
                     }),
                   );
                 },

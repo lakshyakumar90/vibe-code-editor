@@ -97,7 +97,16 @@ vi.mock("@repo/db", () => ({
       update: dbMocks.gitRepositoryUpdate,
       create: dbMocks.gitRepositoryCreate,
     },
-    account: { findFirst: dbMocks.accountFindFirst },
+    account: {
+      findFirst: dbMocks.accountFindFirst,
+      // getGitHubToken reads every GitHub row (sign-in + linkSocial rows may
+      // coexist); tests drive it through accountFindFirst.
+      findMany: async (...args: unknown[]) => {
+        const row = await dbMocks.accountFindFirst(...args);
+        return row ? [row] : [];
+      },
+      updateMany: vi.fn(async () => ({ count: 0 })),
+    },
     file: {
       findMany: dbMocks.fileFindMany,
       update: dbMocks.fileUpdate,
@@ -132,6 +141,17 @@ vi.mock("../projects/files/file.events", () => ({
   emitFileTreeChanged: eventMocks.tree,
   emitFileContentChanged: eventMocks.content,
 }));
+
+// Live token validation (getGitHubToken → fetchGitHubUser): default to a
+// revoked grant so stored-scope checks stay deterministic.
+const githubAuthMocks = vi.hoisted(() => ({
+  fetchGitHubUser: vi.fn(async () => ({ ok: false, httpStatus: 401, revoked: true })),
+}));
+
+vi.mock("../github/github.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../github/github.service")>();
+  return { ...actual, fetchGitHubUser: githubAuthMocks.fetchGitHubUser };
+});
 
 const collabMocks = vi.hoisted(() => ({
   getActiveEditorService: vi.fn(
@@ -247,6 +267,8 @@ beforeEach(() => {
   engineMocks.currentBranch.mockResolvedValue("main");
   fetchDetailMock.mockReset();
   fetchDetailMock.mockResolvedValue(repoDetail());
+  githubAuthMocks.fetchGitHubUser.mockReset();
+  githubAuthMocks.fetchGitHubUser.mockResolvedValue({ ok: false, httpStatus: 401, revoked: true });
   eventMocks.tree.mockClear();
   eventMocks.content.mockClear();
   collabMocks.getActiveEditorService.mockReturnValue(null);
@@ -386,7 +408,7 @@ describe("push guards", () => {
 
   it("local-only repos cannot push", async () => {
     dbMocks.gitRepositoryFindUnique.mockResolvedValue({ ...LINK, owner: null, repo: null });
-    await expect(pushProject("p1", USER)).rejects.toMatchObject({ code: "GIT_REMOTE_UNAVAILABLE" });
+    await expect(pushProject("p1", USER)).rejects.toMatchObject({ code: "GIT_NO_REMOTE" });
   });
 
   it("missing token → reauth, unknown branch → not found, bad name → invalid", async () => {

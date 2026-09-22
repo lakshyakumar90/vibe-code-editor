@@ -244,6 +244,7 @@ export const gitService = {
       ahead: number;
       behind: number;
     };
+    pushError?: { code: string; message: string };
   }> {
     const res = await api.post<
       ApiResponse<{
@@ -260,6 +261,7 @@ export const gitService = {
           ahead: number;
           behind: number;
         };
+        pushError?: { code: string; message: string };
       }>
     >(`/api/projects/${projectId}/git/publish`, input);
     return res.data;

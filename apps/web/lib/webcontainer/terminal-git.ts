@@ -77,7 +77,32 @@ export function isMutatingGitCommand(argv: string[]): boolean {
   return MUTATING.has(argv[0]!);
 }
 
-/** Matches jsh's unknown-command error for `git`. */
+export interface TerminalGitEvent {
+  projectId?: string;
+  command: string;
+  branchChanged: boolean;
+  filesChanged: boolean;
+  shouldRefreshGitState: boolean;
+}
+
+/** Build an explicit state payload from shim argv (no raw output as state). */
+export function terminalGitEventFor(argv: string[]): Omit<TerminalGitEvent, "projectId"> {
+  const command = argv[0] ?? "";
+  const branchChanged = command === "switch" || command === "checkout" || command === "branch";
+  const filesChanged =
+    command === "checkout" ||
+    command === "switch" ||
+    command === "restore" ||
+    command === "reset" ||
+    command === "init";
+  return {
+    command,
+    branchChanged,
+    filesChanged,
+    shouldRefreshGitState: branchChanged || filesChanged,
+  };
+}
+
 export function isGitNotFoundLine(line: string): boolean {
   return /command not found:\s*git\b/.test(line);
 }

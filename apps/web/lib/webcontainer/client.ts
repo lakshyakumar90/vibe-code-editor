@@ -14,9 +14,14 @@ let containerPromise: Promise<WebContainer> | null = null;
 export function getWebContainer(): Promise<WebContainer> {
   if (!containerPromise) {
     if (typeof window !== "undefined" && window.crossOriginIsolated === false) {
-      throw new Error(
-        "Browser blocked isolated execution (SharedArrayBuffer unavailable). Use Chrome/Edge on https or localhost — not private windows, blockers, or cross-origin iframes.",
-      );
+      // crossOriginIsolated can be transiently false on cold reload; wait
+      // briefly for headers/isolation to settle before giving up.
+      containerPromise = waitForIsolation(4000).then(() => WebContainer.boot());
+      const attempt = containerPromise;
+      attempt.catch(() => {
+        if (containerPromise === attempt) containerPromise = null;
+      });
+      return containerPromise;
     }
     const attempt = WebContainer.boot();
     containerPromise = attempt;
@@ -45,4 +50,24 @@ export function describeBootFailure(err: unknown): string {
 /** Test-only reset (e.g. after teardown). */
 export function resetWebContainerCache(): void {
   containerPromise = null;
+}
+
+function waitForIsolation(timeoutMs: number): Promise<void> {
+  if (typeof window === "undefined" || window.crossOriginIsolated !== false) return Promise.resolve();
+  const start = Date.now();
+  return new Promise((resolve, reject) => {
+    const tick = () => {
+      if (window.crossOriginIsolated !== false) return resolve();
+      if (Date.now() - start >= timeoutMs) {
+        reject(
+          new Error(
+            "Browser blocked isolated execution (SharedArrayBuffer unavailable). Use Chrome/Edge on https or localhost — not private windows, blockers, or cross-origin iframes. Reload to retry.",
+          ),
+        );
+        return;
+      }
+      window.setTimeout(tick, 200);
+    };
+    tick();
+  });
 }

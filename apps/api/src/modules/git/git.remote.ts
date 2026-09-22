@@ -51,18 +51,54 @@ function rgit(cwd: string | undefined, extraEnv: Record<string, string>): Simple
 }
 
 /**
- * Credential material for ONE git process. The token travels only in the
- * child process environment (GIT_CONFIG_COUNT/KEY/VALUE composition, a
- * native git feature) plus a prompt kill-switch. Never persisted anywhere.
+ * Credential material for ONE git process. The token travels only as a
+ * per-command `-c http.extraHeader` argument (never written to
+ * `.git/config`, never logged, never returned). We intentionally do NOT
+ * use GIT_CONFIG_COUNT/KEY/VALUE env entries: simple-git strips those as
+ * unsafe ("allowUnsafeConfigEnvCount"), which silently dropped auth and
+ * caused every push/fetch to fail as unauthenticated.
  */
 export function gitAuthEnv(token: string | null): Record<string, string> {
-  const env: Record<string, string> = { GIT_TERMINAL_PROMPT: "0" };
+  const env: Record<string, string> = {
+    GIT_TERMINAL_PROMPT: "0",
+    // Never let OS credential helpers (Git Credential Manager device flow,
+    // the "Authorize your device / enter code" popup) engage for server-side
+    // transport: auth travels only via -c http.extraHeader, and any missing
+    // or rejected credential must fail fast with a proper API error instead.
+    GCM_INTERACTIVE: "never",
+  };
   if (token) {
-    env["GIT_CONFIG_COUNT"] = "1";
-    env["GIT_CONFIG_KEY_0"] = "http.extraHeader";
     env["GIT_CONFIG_VALUE_0"] = `Authorization: Bearer ${token}`;
   }
   return env;
+}
+
+/** Extract the Bearer token stashed by gitAuthEnv (undefined when none). Pure. */
+function authTokenFromEnv(authEnv: Record<string, string>): string | null {
+  const v = authEnv["GIT_CONFIG_VALUE_0"];
+  if (typeof v !== "string") return null;
+  const m = /^Authorization:\s*Bearer\s+(.+)$/.exec(v.trim());
+  return m ? m[1]!.trim() || null : null;
+}
+
+/** Clean env safe to hand to simple-git (no GIT_CONFIG_* entries). Pure. */
+function cleanAuthEnv(authEnv: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(authEnv)) {
+    if (k.startsWith("GIT_CONFIG_")) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
+/** Per-command `-c http.extraHeader=...` prefix carrying auth. Pure. */
+function authConfigArgs(token: string | null): string[] {
+  // NOTE: no `-c credential.helper=` here — simple-git refuses to run any
+  // `-c credential.*` override ("allowUnsafeCredentialHelper"). Helper
+  // popups are suppressed via env instead (GIT_TERMINAL_PROMPT=0 +
+  // GCM_INTERACTIVE=never in gitAuthEnv), which simple-git forwards as-is.
+  if (!token) return [];
+  return ["-c", `http.extraHeader=Authorization: Bearer ${token}`];
 }
 
 /** Strip any credential-shaped material from diagnostics. Pure. */
@@ -187,9 +223,13 @@ export async function cloneRepo(
 ): Promise<void> {
   const safeUrl = assertSafeRemoteUrl(url);
   try {
+    const token = authTokenFromEnv(authEnv);
+    const env = cleanAuthEnv(authEnv);
     // simple-git requires an existing baseDir; the absolute target stands
     // on its own, so the process cwd is a safe anchor.
-    await withRemoteTimeout("clone", () => rgit(process.cwd(), authEnv).clone(safeUrl, dir));
+    await withRemoteTimeout("clone", () =>
+      rgit(process.cwd(), env).raw([...authConfigArgs(token), "clone", safeUrl, dir]),
+    );
   } catch (err) {
     throw classifyTransportError("clone", err);
   }
@@ -317,8 +357,10 @@ export async function lsRemoteHead(
   const safeUrl = assertSafeRemoteUrl(url);
   let out: string;
   try {
+    const token = authTokenFromEnv(authEnv);
+    const env = cleanAuthEnv(authEnv);
     out = await withRemoteTimeout("clone", () =>
-      rgit(process.cwd(), authEnv).raw(["ls-remote", safeUrl, "HEAD"]),
+      rgit(process.cwd(), env).raw([...authConfigArgs(token), "ls-remote", safeUrl, "HEAD"]),
     );
   } catch (err) {
     throw classifyTransportError("clone", err);
@@ -467,7 +509,11 @@ export async function fetchOrigin(
   authEnv: Record<string, string>,
 ): Promise<void> {
   try {
-    await withRemoteTimeout("fetch", () => rgit(worktreeDir, authEnv).fetch(["--prune", "origin"]));
+    const token = authTokenFromEnv(authEnv);
+    const env = cleanAuthEnv(authEnv);
+    await withRemoteTimeout("fetch", () =>
+      rgit(worktreeDir, env).raw([...authConfigArgs(token), "fetch", "--prune", "origin"]),
+    );
   } catch (err) {
     throw classifyTransportError("fetch", err);
   }
@@ -513,11 +559,13 @@ export async function pushBranch(
 ): Promise<void> {
   assertBranch(branch);
   try {
-    const g = rgit(worktreeDir, authEnv);
+    const token = authTokenFromEnv(authEnv);
+    const g = rgit(worktreeDir, cleanAuthEnv(authEnv));
+    const prefix = authConfigArgs(token);
     if (setUpstream) {
-      await withRemoteTimeout("push", () => g.push("origin", branch, { "--set-upstream": null }));
+      await withRemoteTimeout("push", () => g.raw([...prefix, "push", "--set-upstream", "origin", branch]));
     } else {
-      await withRemoteTimeout("push", () => g.push("origin", branch));
+      await withRemoteTimeout("push", () => g.raw([...prefix, "push", "origin", branch]));
     }
   } catch (err) {
     throw classifyTransportError("push", err);

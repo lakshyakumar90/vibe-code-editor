@@ -1,5 +1,5 @@
 import { prisma } from "@repo/db";
-import { hasRepoScope } from "../github/github.service";
+import { fetchGitHubUser, hasRepoScope } from "../github/github.service";
 import {
   createOrgRepo,
   createUserRepo,
@@ -227,6 +227,8 @@ export interface PublishResult {
   fullName: string;
   remote: RemoteStateDto;
   push: PushResultDto;
+  /** Present when the repo was created+linked but the initial push failed. */
+  pushError?: { code: string; message: string };
 }
 
 export interface HistoryCommitDto {
@@ -391,17 +393,66 @@ function toDiffDto(diff: EngineDiff, prefix: string): GitDiffDto {
 
 /** Server-side GitHub token (repo scope required). Never leaves the server. */
 async function getGitHubToken(userId: string): Promise<string | null> {
-  let account: { accessToken: string | null; scope: string | null } | null;
+  let accounts: Array<{ accessToken: string | null; scope: string | null }>;
   try {
-    account = await prisma.account.findFirst({
+    // linkSocial (repo-scope elevation) may create a second account row next
+    // to the original sign-in row (minimal scopes), and findFirst() order is
+    // not guaranteed — so inspect every GitHub row and prefer a repo grant.
+    accounts = await prisma.account.findMany({
       where: { userId, providerId: "github" },
       select: { accessToken: true, scope: true },
     });
   } catch {
     return null;
   }
-  if (!account?.accessToken || !hasRepoScope(account.scope)) return null;
-  return account.accessToken;
+  const withToken = accounts.filter((a) => a.accessToken);
+  if (withToken.length === 0) return null;
+  // Prefer a row whose stored scope already proves repo access (cheap path,
+  // no network). Otherwise fall through to live validation below.
+  const stored = withToken.find((a) => hasRepoScope(a.scope));
+  if (stored?.accessToken) return stored.accessToken;
+  // Stored scopes may be stale (sign-in grant kept while the repo elevation
+  // landed elsewhere, or Better Auth never backfilled `scope`). Validate each
+  // token live against GET /user and trust the authoritative x-oauth-scopes
+  // header; backfill the stored scope so the next call takes the cheap path.
+  for (const candidate of withToken) {
+    const token = candidate.accessToken!;
+    let verification: { ok: boolean; oauthScopes?: string | null } | null = null;
+    try {
+      verification = await fetchGitHubUser(token);
+    } catch {
+      verification = null;
+    }
+    if (verification && verification.ok) {
+      const effective = verification.oauthScopes ?? candidate.scope ?? null;
+      if (hasRepoScope(effective)) {
+        try {
+          await prisma.account.updateMany({
+            where: { userId, providerId: "github" },
+            data: { scope: effective },
+          });
+        } catch {
+          // Backfill is best-effort; the in-memory token is what matters.
+        }
+        return token;
+      }
+      // Live scopes authoritatively lack repo access: this grant can never
+      // work for transport. Keep checking other rows before giving up.
+      continue;
+    }
+    if (verification && !verification.ok) {
+      // Transient outage (network / 5xx / rate-limit): do NOT burn a
+      // possibly-valid grant — return it and let the transport attempt
+      // decide (fetchRepoDetail maps true auth failures to REAUTH and
+      // transient ones to UNAVAILABLE). Hard 401/403 means revoked.
+      const status = (verification as { httpStatus?: number }).httpStatus ?? 0;
+      if (status === 0 || status >= 500 || status === 429) return token;
+      continue;
+    }
+    // Unverifiable right now (import error etc.): same fail-open policy.
+    return token;
+  }
+  return null;
 }
 
 /**
@@ -483,16 +534,9 @@ async function resolveGitHubHead(
   repo: string,
   branch: string,
 ): Promise<string | null> {
-  let account: { accessToken: string | null; scope: string | null } | null;
-  try {
-    account = await prisma.account.findFirst({
-      where: { userId, providerId: "github" },
-      select: { accessToken: true, scope: true },
-    });
-  } catch {
-    return null;
-  }
-  if (!account?.accessToken || !hasRepoScope(account.scope)) return null;
+  // Same token policy as transport: live-validated, multi-row aware.
+  const accessToken = await getGitHubToken(userId);
+  if (!accessToken) return null;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10000);
@@ -501,7 +545,7 @@ async function resolveGitHubHead(
       {
         headers: {
           Accept: "application/vnd.github+json",
-          Authorization: `Bearer ${account.accessToken}`,
+          Authorization: `Bearer ${accessToken}`,
           "User-Agent": "vibe-code-editor",
           "X-GitHub-Api-Version": "2022-11-28",
         },
@@ -1489,12 +1533,6 @@ export async function pullProject(projectId: string, user: SessionUser): Promise
     const prefix = await readPrefix(ensured.worktreeDir, fresh.importRoot);
     const branch = await currentBranch(ensured.worktreeDir);
     const upstream = await getUpstream(ensured.worktreeDir, branch).catch(() => null);
-    if (!upstream) {
-      throw new GitError(
-        "GIT_NO_UPSTREAM",
-        `Branch "${branch}" has no upstream configured. Fetch is still available.`,
-      );
-    }
     const unsaved = await findAllUnsavedPaths(projectId);
     if (unsaved.length > 0) {
       throw new GitError("GIT_DIRTY_EDITOR_STATE", "Save open editors before pulling", {
@@ -1512,7 +1550,21 @@ export async function pullProject(projectId: string, user: SessionUser): Promise
     }
     const oldSha = await tryRevparse(ensured.worktreeDir, "HEAD");
     await fetchOrigin(ensured.worktreeDir, gitAuthEnv(token));
-    const merged = await mergeFastForward(ensured.worktreeDir, upstream);
+    // No local upstream (typical right after publish when the first push
+    // failed): fall back to origin/<branch> when the remote branch exists.
+    // Only when it doesn't exist is there genuinely nothing to pull.
+    let mergeRef = upstream;
+    if (!mergeRef) {
+      const remoteSha = await tryRevparse(ensured.worktreeDir, `origin/${branch}`);
+      if (!remoteSha) {
+        throw new GitError(
+          "GIT_NO_UPSTREAM",
+          `Branch "${branch}" has no upstream and does not exist on the remote yet. Push first, then pull.`,
+        );
+      }
+      mergeRef = `origin/${branch}`;
+    }
+    const merged = await mergeFastForward(ensured.worktreeDir, mergeRef);
     const newSha = await tryRevparse(ensured.worktreeDir, "HEAD");
     let reconciled = { filesUpserted: 0, filesDeleted: 0, changedFileIds: [] as string[] };
     if (merged.updated) {
@@ -1545,7 +1597,7 @@ export async function pushProject(
   return withProjectGitLock(projectId, "push", async () => {
     const link = await requireLink(projectId);
     if (!link.owner || !link.repo) {
-      throw new GitError("GIT_REMOTE_UNAVAILABLE", "No remote configured for this repository.");
+      throw new GitError("GIT_NO_REMOTE", "No GitHub remote configured for this repository.");
     }
     requireKnownImportRoot(link);
     const token = await getGitHubToken(user.id);
@@ -1901,7 +1953,8 @@ export async function publishProject(
     if (link.owner && link.repo) {
       throw new GitError(
         "GIT_REMOTE_ALREADY_CONFIGURED",
-        `This project is already connected to ${link.owner}/${link.repo}.`,
+        `This project is already connected to ${link.owner}/${link.repo}. Push from Source Control to sync — no need to publish again.`,
+        { fullName: `${link.owner}/${link.repo}`, nextAction: "push" },
       );
     }
     // Publish creates a brand-new empty repo, so healing a legacy NULL root
@@ -2000,18 +2053,33 @@ export async function publishProject(
     await setCloneMarker(dir);
 
     // Initial push (reentrant lock: same async chain). The binding stays
-    // even if the push fails — Source Control offers Push to retry.
+    // even if the push fails — return pushed:false so the UI can offer
+    // a one-click Push retry instead of a dead-end 500.
     let push: PushResultDto;
     try {
       const branch = await currentBranch(dir).catch(() => link.currentBranch);
       push = await pushProject(projectId, user, branch);
     } catch (err) {
-      if (err instanceof GitError) throw err;
-      throw new GitError(
-        "GIT_PUBLISH_FAILED",
-        "Repository created and linked, but the initial push failed. Push from Source Control to retry.",
-        { fullName: verified.fullName },
-      );
+      const code = err instanceof GitError ? err.code : "GIT_PUBLISH_FAILED";
+      const message =
+        err instanceof GitError
+          ? err.message
+          : "Repository created and linked, but the initial push failed. Push from Source Control to retry.";
+      const branch = link.currentBranch;
+      const remote = await remoteStateAfterSetup(projectId, user, {
+        owner: verified.owner,
+        repo: verified.repo,
+        fullName: verified.fullName,
+        url,
+      });
+      return {
+        attached: true,
+        created: true,
+        fullName: verified.fullName,
+        remote,
+        push: { branch, remote: `origin/${branch}`, pushed: false, oldSha: null, newSha: null, ahead: 0, behind: 0 },
+        pushError: { code, message },
+      } as PublishResult;
     }
     const remote = await remoteStateAfterSetup(projectId, user, {
       owner: verified.owner,

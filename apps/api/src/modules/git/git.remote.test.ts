@@ -107,10 +107,14 @@ describe("pure helpers", () => {
   it("gitAuthEnv carries credentials process-only, never persisted", () => {
     const env = gitAuthEnv("tok123");
     expect(env["GIT_TERMINAL_PROMPT"]).toBe("0");
-    expect(env["GIT_CONFIG_COUNT"]).toBe("1");
-    expect(env["GIT_CONFIG_KEY_0"]).toBe("http.extraHeader");
+    // Credential helpers stay disabled so server-side transport fails fast
+    // instead of popping the OS "Authorize your device" code-entry window.
+    expect(env["GCM_INTERACTIVE"]).toBe("never");
     expect(env["GIT_CONFIG_VALUE_0"]).toBe("Authorization: Bearer tok123");
-    expect(gitAuthEnv(null)).toEqual({ GIT_TERMINAL_PROMPT: "0" });
+    // Must NOT use GIT_CONFIG_COUNT/KEY: simple-git strips those as unsafe.
+    expect(env["GIT_CONFIG_COUNT"]).toBeUndefined();
+    expect(env["GIT_CONFIG_KEY_0"]).toBeUndefined();
+    expect(gitAuthEnv(null)).toEqual({ GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "never" });
   });
 
   it("sanitizeRemoteMessage redacts credential shapes", () => {

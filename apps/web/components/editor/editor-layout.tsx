@@ -845,10 +845,16 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
   }, [runtime, projectId, handleTerminalFilesChanged]);
 
   useEffect(() => {
+    let debounce: ReturnType<typeof setTimeout> | null = null;
     const onTerminalGit = (e: Event) => {
       const mutating = (e as CustomEvent).detail?.mutating === true;
       if (!mutating) return;
-      void syncTerminalFiles().catch(() => undefined);
+      // Coalesce bursts (e.g. checkout = one convergence cycle).
+      if (debounce) return;
+      debounce = setTimeout(() => {
+        debounce = null;
+        void syncTerminalFiles().catch(() => undefined);
+      }, 500);
     };
     const onTerminalRemote = (e: Event) => {
       const url = (e as CustomEvent).detail?.url;
@@ -858,9 +864,17 @@ export function EditorLayout({ projectId, template = "REACT", agentOpen = true, 
     };
     window.addEventListener("vibe:terminal-git", onTerminalGit);
     window.addEventListener("vibe:terminal-remote", onTerminalRemote);
+    // Controlled periodic sync for raw terminal file edits (echo/mv/rm):
+    // scoped container scan (~15s), .git/.vibe/build outputs excluded by
+    // container-sync, in-flight guarded by terminalSyncInFlightRef.
+    const interval = setInterval(() => {
+      void syncTerminalFiles().catch(() => undefined);
+    }, 15000);
     return () => {
       window.removeEventListener("vibe:terminal-git", onTerminalGit);
       window.removeEventListener("vibe:terminal-remote", onTerminalRemote);
+      if (debounce) clearTimeout(debounce);
+      clearInterval(interval);
     };
   }, [syncTerminalFiles, runtime]);
 

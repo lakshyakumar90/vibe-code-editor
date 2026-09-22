@@ -99,7 +99,14 @@ vi.mock("@repo/db", () => ({
       update: dbMocks.gitRepositoryUpdate,
       create: dbMocks.gitRepositoryCreate,
     },
-    account: { findFirst: dbMocks.accountFindFirst },
+    account: {
+      findFirst: dbMocks.accountFindFirst,
+      findMany: async (...args: unknown[]) => {
+        const row = await dbMocks.accountFindFirst(...args);
+        return row ? [row] : [];
+      },
+      updateMany: vi.fn(async () => ({ count: 0 })),
+    },
     file: { findMany: dbMocks.fileFindMany },
   },
 }));
@@ -133,6 +140,18 @@ vi.mock("../projects/files/file.events", () => ({
 vi.mock("../collab/collab.editor", () => ({
   getActiveEditorService: vi.fn(() => null),
 }));
+
+// Live token validation (getGitHubToken → fetchGitHubUser): default to a
+// revoked grant so stored-scope checks stay deterministic; individual tests
+// override per case.
+const githubAuthMocks = vi.hoisted(() => ({
+  fetchGitHubUser: vi.fn(async () => ({ ok: false, httpStatus: 401, revoked: true })),
+}));
+
+vi.mock("../github/github.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../github/github.service")>();
+  return { ...actual, fetchGitHubUser: githubAuthMocks.fetchGitHubUser };
+});
 
 vi.mock("./git.sync", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./git.sync")>();
@@ -288,6 +307,8 @@ beforeEach(() => {
   ]);
   fetchDetailMock.mockReset();
   fetchDetailMock.mockResolvedValue(repoDetail());
+  githubAuthMocks.fetchGitHubUser.mockReset();
+  githubAuthMocks.fetchGitHubUser.mockResolvedValue({ ok: false, httpStatus: 401, revoked: true });
   createUserMock.mockReset();
   createOrgMock.mockReset();
   listOrgsMock.mockReset();

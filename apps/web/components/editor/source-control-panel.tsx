@@ -44,6 +44,7 @@ const REMOTE_ERROR_TOASTS: Record<string, "info" | "error"> = {
   GIT_PULL_DIVERGED: "info",
   GIT_PUSH_REJECTED: "info",
   GIT_PUSH_DENIED: "error",
+  GIT_NO_REMOTE: "info",
   GIT_REMOTE_UNAVAILABLE: "error",
   GIT_GITHUB_REAUTH_REQUIRED: "error",
   GIT_REMOTE_TIMEOUT: "error",
@@ -248,7 +249,8 @@ export function SourceControlPanel({ projectId, onOpenDiff, isPathDirty }: Sourc
   const refreshAfterRemoteOp = useCallback(async () => {
     await load();
     await loadRemote();
-  }, [load, loadRemote]);
+    window.dispatchEvent(new CustomEvent("vibe:git-state-changed", { detail: { projectId } }));
+  }, [load, loadRemote, projectId]);
 
   const handleInitialize = useCallback(async () => {
     setInitializing(true);
@@ -296,17 +298,23 @@ export function SourceControlPanel({ projectId, onOpenDiff, isPathDirty }: Sourc
     const result = await runOp("pull", () => gitService.pull(projectId), (r) => r.status);
     if (result) {
       await refreshAfterRemoteOp();
+      if (showHistory) void loadHistory(null, false);
       toast.success(result.pulled ? "Pulled latest changes" : "Already up to date");
+    } else {
+      // Diverged/failed pulls still refresh ahead/behind.
+      await load();
     }
-  }, [projectId, runOp, refreshAfterRemoteOp]);
+  }, [projectId, runOp, refreshAfterRemoteOp, showHistory, loadHistory]);
 
   const handlePush = useCallback(async () => {
     const result = await runOp("push", () => gitService.push(projectId));
+    // Refresh even on failure: a rejected push can still advance remote refs.
+    await refreshAfterRemoteOp();
+    if (showHistory) void loadHistory(null, false);
     if (result) {
-      await refreshAfterRemoteOp();
       toast.success(`Pushed ${result.branch} to origin`);
     }
-  }, [projectId, runOp, refreshAfterRemoteOp]);
+  }, [projectId, runOp, refreshAfterRemoteOp, showHistory, loadHistory]);
 
   // Phase 4B.5 — after attach/publish the panel must immediately reflect
   // the new origin (no browser refresh): status, remote, and branches.
@@ -324,9 +332,10 @@ export function SourceControlPanel({ projectId, onOpenDiff, isPathDirty }: Sourc
       if (result) {
         toast.success(`Switched to ${result.branch}`);
         void loadBranches();
+        if (showHistory) void loadHistory(null, false);
       }
     },
-    [projectId, runOp, loadBranches],
+    [projectId, runOp, loadBranches, showHistory, loadHistory],
   );
 
   const handleCreateBranch = useCallback(async () => {
@@ -888,7 +897,8 @@ export function SourceControlPanel({ projectId, onOpenDiff, isPathDirty }: Sourc
           {busy === "commit" ? "Committing…" : "Commit"}
         </button>
         <p className="mt-1.5 text-[11px] text-muted-foreground">
-          Local commit only — nothing is pushed.
+          Local commit only — nothing is pushed. Terminal git is local to the runtime;
+          Source Control manages the persistent project repository.
         </p>
       </div>
 
