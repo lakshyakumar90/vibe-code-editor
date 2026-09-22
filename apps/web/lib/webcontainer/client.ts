@@ -11,12 +11,28 @@ import { WebContainer } from "@webcontainer/api";
  */
 let containerPromise: Promise<WebContainer> | null = null;
 
+export function isCrossOriginIsolated(): boolean {
+  if (typeof window === "undefined") return false;
+  // crossOriginIsolated is undefined on non-secure contexts / old browsers —
+  // treat anything not explicitly `true` as not-isolated.
+  return window.crossOriginIsolated === true;
+}
+
+const ISOLATION_HELP =
+  "Browser blocked isolated execution (SharedArrayBuffer unavailable). Use Chrome/Edge on https or localhost — not private windows, blockers, or cross-origin iframes. Then restart `pnpm --filter web dev` so the COOP/COEP headers apply.";
+
 export function getWebContainer(): Promise<WebContainer> {
   if (!containerPromise) {
-    if (typeof window !== "undefined" && window.crossOriginIsolated === false) {
-      throw new Error(
-        "Browser blocked isolated execution (SharedArrayBuffer unavailable). Use Chrome/Edge on https or localhost — not private windows, blockers, or cross-origin iframes.",
-      );
+    if (!isCrossOriginIsolated()) {
+      // Return (not throw) a rejected promise so callers' try/catch +
+      // retry logic works — a synchronous throw poisoned boot flows
+      // that only handled async rejections.
+      containerPromise = Promise.reject(new Error(ISOLATION_HELP));
+      const failed = containerPromise;
+      failed.catch(() => {
+        if (containerPromise === failed) containerPromise = null;
+      });
+      return containerPromise;
     }
     const attempt = WebContainer.boot();
     containerPromise = attempt;
@@ -29,11 +45,8 @@ export function getWebContainer(): Promise<WebContainer> {
 
 /** Human-readable boot failure (surfaced in Preview + terminal). */
 export function describeBootFailure(err: unknown): string {
-  if (
-    typeof window !== "undefined" &&
-    window.crossOriginIsolated === false
-  ) {
-    return "Browser blocked isolated execution (SharedArrayBuffer unavailable). Use Chrome/Edge on https or localhost — not private windows, blockers, or cross-origin iframes.";
+  if (!isCrossOriginIsolated()) {
+    return ISOLATION_HELP;
   }
   const msg = err instanceof Error ? err.message : String(err ?? "");
   if (/failed to fetch|network|load|cdn|import\(|chunk/i.test(msg)) {

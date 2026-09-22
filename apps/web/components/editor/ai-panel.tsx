@@ -49,7 +49,7 @@ import type {
 } from "@/lib/ai/types";
 
 const MODE_META: Record<AiPanelMode, { label: string; hint: string }> = {
-  ask: { label: "Ask", hint: "Read-only chat, no file access" },
+  ask: { label: "Ask", hint: "Chat with automatic project context" },
   plan: { label: "Plan", hint: "Read-only plan as a checklist, no writes" },
   agent: { label: "Agent", hint: "Runs commands, verifies builds, edits via reviewable changesets" },
 };

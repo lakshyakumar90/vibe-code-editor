@@ -6,7 +6,11 @@ const nextConfig = {
   async headers() {
     return [
       {
-        source: "/dashboard/projects/:path*",
+        // WebContainer needs SharedArrayBuffer on the editor page.
+        // Applied broadly: Next matches most-specific first, and a narrow
+        // "/dashboard/projects/:path*" pattern misses the exact
+        // "/dashboard/projects/[projectId]" page in some versions.
+        source: "/:path*",
         headers: [
           {
             key: "Cross-Origin-Embedder-Policy",
