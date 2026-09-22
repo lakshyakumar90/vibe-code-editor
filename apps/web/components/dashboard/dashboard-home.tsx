@@ -4,12 +4,12 @@ import React, { useState } from "react";
 import { CreateProjectCard } from "./create-project-card";
 import { RecentProjects } from "./recent-projects";
 import { StarredProjects } from "./starred-projects";
-import { CreateProjectSheet } from "components/projects/create-project-sheet";
+import { CreateProjectWizard } from "components/projects/create-project-wizard";
 
 export function DashboardHome() {
   const [open, setOpen] = useState(false);
   return (
-    <div className="mx-auto w-full max-w-7xl px-32 py-10">
+    <div className="mx-auto w-full max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="">
         <div className="mb-10">
           <p className="text-sm text-muted-foreground">Welcome back</p>
@@ -23,10 +23,7 @@ export function DashboardHome() {
             started.
           </p>
         </div>
-        <CreateProjectSheet
-          open={open}
-          onOpenChange={setOpen}
-        />
+        <CreateProjectWizard open={open} onOpenChange={setOpen} />
       </div>
 
       <CreateProjectCard onCreateProject={() => setOpen(true)} />
