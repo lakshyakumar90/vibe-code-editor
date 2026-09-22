@@ -5,6 +5,7 @@ import { DM_Sans } from "next/font/google";
 import { cn } from "@/lib/utils";
 import { Navbar } from "@/components/layout/navbar";
 import { ThemeProvider } from "@/components/layout/theme-provider";
+import { QueryProvider } from "./query-provider";
 
 const dmSans = DM_Sans({ subsets: ["latin"], variable: "--font-sans" });
 
@@ -37,7 +38,9 @@ export default function RootLayout({
           disableTransitionOnChange
         >
           <Navbar />
-          <div className="">{children}</div>
+          <QueryProvider>
+            <div className="">{children}</div>
+          </QueryProvider>
         </ThemeProvider>
       </body>
     </html>
